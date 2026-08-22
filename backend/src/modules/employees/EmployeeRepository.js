@@ -176,6 +176,21 @@ export class EmployeeRepository extends BaseRepository {
     return (result.rowCount ?? 0) > 0;
   }
 
+  /**
+   * Finds an employee by their work email address.
+   * @param {string} email
+   * @param {import('pg').PoolClient|null} [client]
+   * @returns {Promise<object|null>}
+   */
+  async findByEmail(email, client = null) {
+    const result = await this._query(
+      `SELECT id, company_id, login_id, work_email FROM employees WHERE LOWER(work_email) = LOWER($1) LIMIT 1`,
+      [email],
+      client
+    );
+    return result.rows.length ? this.toCamelCase(result.rows[0]) : null;
+  }
+
   // ── Private helpers ────────────────────────────────────────────────────────
 
   /**

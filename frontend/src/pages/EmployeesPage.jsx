@@ -215,7 +215,11 @@ function NewEmployeeModal({ open, onClose, departments, employees, onSuccess }) 
       onSuccess(res.data);
       toast('Employee created successfully.', 'success');
     } else {
-      toast(res.error?.message || 'Could not create employee.', 'error');
+      const msg = res.error?.message || 'Could not create employee.';
+      if (msg.toLowerCase().includes('email')) {
+        setErrors((prev) => ({ ...prev, email: msg }));
+      }
+      toast(msg, 'error');
     }
   };
 
