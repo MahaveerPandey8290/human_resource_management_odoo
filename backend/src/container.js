@@ -53,7 +53,7 @@ import { requirePasswordChanged } from "./middleware/requirePasswordChanged.js";
  */
 export function buildContainer() {
   const logger = new Logger();
-  const db = new Database(logger);
+  const db = new Database();   // Database manages its own connection pool and logging
   const cache = new Cache(60000);
 
   // Repositories

@@ -71,3 +71,7 @@ export class Logger {
     this.logger.debug(msgOrObj, msg);
   }
 }
+
+// Singleton instance — import this directly instead of constructing your own.
+// Usage:  import { logger } from '../core/Logger.js';
+export const logger = new Logger();

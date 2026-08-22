@@ -1,305 +1,377 @@
 /**
- * @file LeaveRepository.js
- * Owns raw SQL queries for leave types, allocations, requests, and transactional review locks.
- * Must not contain business rules or HTTP logic.
+ * @fileoverview LeaveRepository — data access for leave types, allocations, requests, and approvals.
+ *
+ * The approval flow here is intentionally transactional and uses SELECT … FOR UPDATE
+ * to prevent two managers from approving the same request concurrently or a
+ * double-deduction on the leave allocation balance.
+ *
+ * PostgreSQL differences from MySQL:
+ * - ON DUPLICATE KEY UPDATE   →  ON CONFLICT … DO UPDATE
+ * - YEAR(column)              →  EXTRACT(YEAR FROM column)
+ * - is_paid = 0               →  is_paid = false
+ * - All ? placeholders        →  $1, $2, …
  */
 
-import { BaseRepository } from "../../core/BaseRepository.js";
+import { BaseRepository } from '../../core/BaseRepository.js';
 
 export class LeaveRepository extends BaseRepository {
-  /**
-   * @param {import("../../config/database.js").Database} db
-   */
+  /** @param {import('../../config/database.js').Database} db */
   constructor(db) {
     super(
       db,
-      "leave_requests",
+      'leave_requests',
       [
-        "id", "employee_id", "leave_type_id", "start_date", "end_date", "days",
-        "reason", "attachment_url", "status", "reviewed_by", "review_comment",
-        "reviewed_at", "created_at"
+        'id', 'employee_id', 'leave_type_id', 'start_date', 'end_date', 'days',
+        'reason', 'attachment_url', 'status', 'reviewed_by', 'review_comment',
+        'reviewed_at', 'created_at',
       ],
-      ["id", "start_date", "created_at"]
+      ['id', 'start_date', 'created_at']
     );
   }
 
+  // ── Leave Types ────────────────────────────────────────────────────────────────
+
   /**
-   * Finds all leave types for a company.
+   * Returns all leave types configured for a company.
+   *
    * @param {number} companyId
-   * @param {import("mysql2/promise").Connection} [conn]
-   * @returns {Promise<Array<Record<string, any>>>}
+   * @returns {Promise<Record<string, any>[]>}
    */
-  async findAllTypes(companyId, conn = null) {
-    const sql = `SELECT id, company_id, name, is_paid, requires_attachment, default_days FROM leave_types WHERE company_id = ? ORDER BY id ASC`;
-    const [rows] = await this.db.query(sql, [companyId], "LeaveRepository.findAllTypes", conn || this.activeConn);
-    return rows.map((r) => this.toCamelCase(r));
+  async findAllTypes(companyId) {
+    const result = await this._query(
+      `SELECT id, company_id, name, is_paid, requires_attachment, default_days
+         FROM leave_types
+        WHERE company_id = $1
+        ORDER BY id ASC`,
+      [companyId]
+    );
+    return result.rows.map((r) => this.toCamelCase(r));
   }
 
   /**
-   * Finds single leave type by ID and companyId.
+   * Finds a single leave type by ID, scoped to a company.
+   *
    * @param {number} id
    * @param {number} companyId
-   * @param {import("mysql2/promise").Connection} [conn]
    * @returns {Promise<Record<string, any>|null>}
    */
-  async findTypeById(id, companyId, conn = null) {
-    const sql = `SELECT * FROM leave_types WHERE id = ? AND company_id = ? LIMIT 1`;
-    const [rows] = await this.db.query(sql, [id, companyId], "LeaveRepository.findTypeById", conn || this.activeConn);
-    return rows.length ? this.toCamelCase(rows[0]) : null;
+  async findTypeById(id, companyId) {
+    const result = await this._query(
+      `SELECT * FROM leave_types WHERE id = $1 AND company_id = $2 LIMIT 1`,
+      [id, companyId]
+    );
+    return result.rows.length ? this.toCamelCase(result.rows[0]) : null;
   }
 
+  // ── Leave Allocations ──────────────────────────────────────────────────────────
+
   /**
-   * Finds leave allocations for an employee and year.
+   * Fetches an employee's leave balances for a given year,
+   * including remaining days (allocated - used) computed in SQL.
+   *
    * @param {number} employeeId
    * @param {number} year
-   * @param {import("mysql2/promise").Connection} [conn]
-   * @returns {Promise<Array<Record<string, any>>>}
+   * @returns {Promise<Record<string, any>[]>}
    */
-  async findAllocationsByEmployee(employeeId, year, conn = null) {
-    const sql = `
-      SELECT la.id, la.employee_id, la.leave_type_id, lt.name AS leave_type_name,
-             lt.is_paid, lt.requires_attachment, la.year, la.allocated_days, la.used_days,
-             (la.allocated_days - la.used_days) AS remaining_days
-      FROM leave_allocations la
-      JOIN leave_types lt ON lt.id = la.leave_type_id
-      WHERE la.employee_id = ? AND la.year = ?
-      ORDER BY lt.id ASC
-    `;
-    const [rows] = await this.db.query(sql, [employeeId, year], "LeaveRepository.findAllocationsByEmployee", conn || this.activeConn);
-    return rows.map((r) => this.toCamelCase(r));
+  async findAllocationsByEmployee(employeeId, year) {
+    const result = await this._query(
+      `SELECT la.id, la.employee_id, la.leave_type_id,
+              lt.name AS leave_type_name,
+              lt.is_paid, lt.requires_attachment,
+              la.year, la.allocated_days, la.used_days,
+              (la.allocated_days - la.used_days) AS remaining_days
+         FROM leave_allocations la
+         JOIN leave_types lt ON lt.id = la.leave_type_id
+        WHERE la.employee_id = $1
+          AND la.year = $2
+        ORDER BY lt.id ASC`,
+      [employeeId, year]
+    );
+    return result.rows.map((r) => this.toCamelCase(r));
   }
 
   /**
-   * Finds a specific allocation record with lock option.
+   * Fetches a specific leave allocation row and locks it for the current transaction.
+   * Used during leave approval to prevent concurrent balance deductions.
+   *
+   * MUST be called inside a db.withTransaction() block.
+   *
    * @param {number} employeeId
    * @param {number} leaveTypeId
    * @param {number} year
-   * @param {import("mysql2/promise").Connection} conn
+   * @param {import('pg').PoolClient} client
    * @returns {Promise<Record<string, any>|null>}
    */
-  async findAllocationForUpdate(employeeId, leaveTypeId, year, conn) {
-    const sql = `
-      SELECT id, employee_id, leave_type_id, year, allocated_days, used_days
-      FROM leave_allocations
-      WHERE employee_id = ? AND leave_type_id = ? AND year = ?
-      FOR UPDATE
-    `;
-    const [rows] = await this.db.query(sql, [employeeId, leaveTypeId, year], "LeaveRepository.findAllocationForUpdate", conn);
-    return rows.length ? this.toCamelCase(rows[0]) : null;
+  async findAllocationForUpdate(employeeId, leaveTypeId, year, client) {
+    const result = await client.query(
+      `SELECT id, employee_id, leave_type_id, year, allocated_days, used_days
+         FROM leave_allocations
+        WHERE employee_id = $1
+          AND leave_type_id = $2
+          AND year = $3
+        FOR UPDATE`,
+      [employeeId, leaveTypeId, year]
+    );
+    return result.rows.length ? this.toCamelCase(result.rows[0]) : null;
   }
 
   /**
-   * Upserts a leave allocation.
-   * @param {object} data
-   * @param {import("mysql2/promise").Connection} [conn]
+   * Creates or updates a leave allocation for an employee.
+   * Used when HR allocates leave for a new employee or updates an existing year.
+   *
+   * @param {{ employeeId: number, leaveTypeId: number, year: number, allocatedDays: number, usedDays?: number }} data
    * @returns {Promise<void>}
    */
-  async upsertAllocation(data, conn = null) {
-    const sql = `
-      INSERT INTO leave_allocations (employee_id, leave_type_id, year, allocated_days, used_days)
-      VALUES (?, ?, ?, ?, ?)
-      ON DUPLICATE KEY UPDATE allocated_days = VALUES(allocated_days)
-    `;
-    await this.db.query(
-      sql,
-      [data.employeeId, data.leaveTypeId, data.year, data.allocatedDays, data.usedDays || 0.0],
-      "LeaveRepository.upsertAllocation",
-      conn || this.activeConn
+  async upsertAllocation(data) {
+    await this._query(
+      `INSERT INTO leave_allocations (employee_id, leave_type_id, year, allocated_days, used_days)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (employee_id, leave_type_id, year)
+       DO UPDATE SET allocated_days = EXCLUDED.allocated_days`,
+      [data.employeeId, data.leaveTypeId, data.year, data.allocatedDays, data.usedDays ?? 0]
     );
   }
 
   /**
-   * Updates used days on an allocation.
+   * Saves updated used_days on an allocation inside a transaction.
+   *
    * @param {number} allocationId
    * @param {number} newUsedDays
-   * @param {import("mysql2/promise").Connection} conn
-   * @returns {Promise<void>}
+   * @param {import('pg').PoolClient} client
    */
-  async updateAllocationUsedDays(allocationId, newUsedDays, conn) {
-    const sql = `UPDATE leave_allocations SET used_days = ? WHERE id = ?`;
-    await this.db.query(sql, [newUsedDays, allocationId], "LeaveRepository.updateAllocationUsedDays", conn);
+  async updateAllocationUsedDays(allocationId, newUsedDays, client) {
+    await client.query(
+      `UPDATE leave_allocations SET used_days = $1 WHERE id = $2`,
+      [newUsedDays, allocationId]
+    );
   }
 
+  // ── Leave Requests ─────────────────────────────────────────────────────────────
+
   /**
-   * Finds overlapping leave requests for an employee.
+   * Checks for any pending or approved leave requests that overlap with a date range.
+   * Used before submitting a new request to prevent double-booking.
+   *
    * @param {number} employeeId
-   * @param {string} startDate
-   * @param {string} endDate
-   * @param {number} [excludeId]
-   * @returns {Promise<Array<object>>}
+   * @param {string} startDate  - YYYY-MM-DD
+   * @param {string} endDate    - YYYY-MM-DD
+   * @param {number} [excludeId] - Skip a specific request ID (useful for edits)
+   * @returns {Promise<Record<string, any>[]>}
    */
   async findOverlappingRequests(employeeId, startDate, endDate, excludeId = null) {
+    const params = [employeeId, endDate, startDate];
     let sql = `
       SELECT id, start_date, end_date, status
-      FROM leave_requests
-      WHERE employee_id = ?
-        AND status IN ('pending', 'approved')
-        AND (start_date <= ? AND end_date >= ?)
+        FROM leave_requests
+       WHERE employee_id = $1
+         AND status IN ('pending', 'approved')
+         AND (start_date <= $2 AND end_date >= $3)
     `;
-    const params = [employeeId, endDate, startDate];
     if (excludeId) {
-      sql += " AND id != ?";
       params.push(excludeId);
+      sql += ` AND id != $${params.length}`;
     }
-    const [rows] = await this.db.query(sql, params, "LeaveRepository.findOverlappingRequests");
-    return rows.map((r) => this.toCamelCase(r));
+    const result = await this._query(sql, params);
+    return result.rows.map((r) => this.toCamelCase(r));
   }
 
   /**
-   * Locks and retrieves a leave request for transactional review.
+   * Locks a leave request row for atomic review (approve / reject).
+   * Prevents two managers from reviewing the same request simultaneously.
+   *
+   * MUST be called inside a db.withTransaction() block.
+   *
    * @param {number} id
-   * @param {import("mysql2/promise").Connection} conn
+   * @param {import('pg').PoolClient} client
    * @returns {Promise<Record<string, any>|null>}
    */
-  async lockRequestForReview(id, conn) {
-    const sql = `SELECT * FROM leave_requests WHERE id = ? FOR UPDATE`;
-    const [rows] = await this.db.query(sql, [id], "LeaveRepository.lockRequestForReview", conn);
-    return rows.length ? this.toCamelCase(rows[0]) : null;
+  async lockRequestForReview(id, client) {
+    const result = await client.query(
+      `SELECT * FROM leave_requests WHERE id = $1 FOR UPDATE`,
+      [id]
+    );
+    return result.rows.length ? this.toCamelCase(result.rows[0]) : null;
   }
 
   /**
-   * Updates status of a reviewed leave request.
+   * Updates the status of a leave request after it has been reviewed.
+   *
    * @param {number} id
-   * @param {string} status
+   * @param {string} status    - 'approved' | 'rejected'
    * @param {number} reviewerId
    * @param {string} [comment]
-   * @param {import("mysql2/promise").Connection} conn
-   * @returns {Promise<void>}
+   * @param {import('pg').PoolClient} client
    */
-  async updateRequestStatus(id, status, reviewerId, comment, conn) {
-    const sql = `
-      UPDATE leave_requests
-      SET status = ?, reviewed_by = ?, review_comment = ?, reviewed_at = NOW()
-      WHERE id = ?
-    `;
-    await this.db.query(sql, [status, reviewerId, comment || null, id], "LeaveRepository.updateRequestStatus", conn);
+  async updateRequestStatus(id, status, reviewerId, comment, client) {
+    await client.query(
+      `UPDATE leave_requests
+          SET status         = $1,
+              reviewed_by    = $2,
+              review_comment = $3,
+              reviewed_at    = NOW()
+        WHERE id = $4`,
+      [status, reviewerId, comment || null, id]
+    );
   }
 
   /**
-   * Deletes a pending leave request belonging to an employee.
+   * Deletes a leave request — only allowed if it is still in 'pending' status
+   * and belongs to the requesting employee.
+   *
    * @param {number} id
    * @param {number} employeeId
    * @returns {Promise<boolean>}
    */
   async deletePendingRequest(id, employeeId) {
-    const sql = `DELETE FROM leave_requests WHERE id = ? AND employee_id = ? AND status = 'pending'`;
-    const [res] = await this.db.query(sql, [id, employeeId], "LeaveRepository.deletePendingRequest");
-    return res.affectedRows > 0;
+    const result = await this._query(
+      `DELETE FROM leave_requests
+        WHERE id = $1 AND employee_id = $2 AND status = 'pending'`,
+      [id, employeeId]
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   /**
-   * Checks if an employee has an approved leave covering a specific date.
+   * Checks whether an employee has an approved leave covering a specific date.
+   * Used by attendance check-in to warn the employee.
+   *
    * @param {number} employeeId
-   * @param {string} workDate
+   * @param {string} workDate - YYYY-MM-DD
    * @returns {Promise<boolean>}
    */
   async findApprovedLeaveOnDate(employeeId, workDate) {
-    const sql = `
-      SELECT id FROM leave_requests
-      WHERE employee_id = ? AND status = 'approved' AND ? BETWEEN start_date AND end_date
-      LIMIT 1
-    `;
-    const [rows] = await this.db.query(sql, [employeeId, workDate], "LeaveRepository.findApprovedLeaveOnDate");
-    return rows.length > 0;
+    const result = await this._query(
+      `SELECT id FROM leave_requests
+        WHERE employee_id = $1
+          AND status = 'approved'
+          AND $2::date BETWEEN start_date AND end_date
+        LIMIT 1`,
+      [employeeId, workDate]
+    );
+    return result.rows.length > 0;
   }
 
   /**
-   * Counts unpaid leave days for an employee within a date range.
+   * Sums approved unpaid leave days that fall inside a payroll period.
+   * Used by the payslip calculator to deduct missing-attendance days.
+   *
    * @param {number} employeeId
    * @param {string} startDate
    * @param {string} endDate
    * @returns {Promise<number>}
    */
   async countUnpaidLeaveDays(employeeId, startDate, endDate) {
-    const sql = `
-      SELECT COALESCE(SUM(lr.days), 0) AS total_unpaid_days
-      FROM leave_requests lr
-      JOIN leave_types lt ON lt.id = lr.leave_type_id
-      WHERE lr.employee_id = ? AND lr.status = 'approved' AND lt.is_paid = 0
-        AND lr.start_date <= ? AND lr.end_date >= ?
-    `;
-    const [rows] = await this.db.query(sql, [employeeId, endDate, startDate], "LeaveRepository.countUnpaidLeaveDays");
-    return Number(rows[0]?.total_unpaid_days || 0);
+    const result = await this._query(
+      `SELECT COALESCE(SUM(lr.days), 0) AS total_unpaid_days
+         FROM leave_requests lr
+         JOIN leave_types lt ON lt.id = lr.leave_type_id
+        WHERE lr.employee_id = $1
+          AND lr.status      = 'approved'
+          AND lt.is_paid     = false
+          AND lr.start_date <= $2
+          AND lr.end_date   >= $3`,
+      [employeeId, endDate, startDate]
+    );
+    return Number(result.rows[0]?.total_unpaid_days ?? 0);
   }
 
+  // ── List queries ───────────────────────────────────────────────────────────────
+
   /**
-   * Lists leave requests with employee details.
-   * @param {object} params
-   * @param {number} params.companyId
-   * @param {number} [params.employeeId]
-   * @param {string} [params.status]
-   * @param {number} [params.page=1]
-   * @param {number} [params.limit=20]
-   * @returns {Promise<{ items: Array<object>, total: number }>}
+   * Returns a paginated, enriched list of leave requests with employee and reviewer info.
+   * Admin sees all; employee sees only their own.
+   *
+   * @param {object} p
+   * @param {number}  p.companyId
+   * @param {number}  [p.employeeId]
+   * @param {string}  [p.status]
+   * @param {number}  [p.page=1]
+   * @param {number}  [p.limit=20]
+   * @returns {Promise<{ items: object[], total: number }>}
    */
   async findRequestsList({ companyId, employeeId, status, page = 1, limit = 20 }) {
-    const offset = (Math.max(1, page) - 1) * limit;
-    const conditions = ["e.company_id = ?"];
-    const params = [companyId];
+    const offset     = (Math.max(1, page) - 1) * limit;
+    const params     = [companyId];
+    const conditions = [`e.company_id = $${params.length}`];
 
     if (employeeId) {
-      conditions.push("lr.employee_id = ?");
       params.push(employeeId);
+      conditions.push(`lr.employee_id = $${params.length}`);
     }
     if (status) {
-      conditions.push("lr.status = ?");
       params.push(status);
+      conditions.push(`lr.status = $${params.length}`);
     }
 
-    const whereClause = `WHERE ${conditions.join(" AND ")}`;
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+    const limitIdx    = params.length + 1;
+    const offsetIdx   = params.length + 2;
+
     const sql = `
-      SELECT 
-        lr.id, lr.employee_id, e.login_id, e.first_name, e.last_name, e.avatar_url,
+      SELECT
+        lr.id, lr.employee_id,
+        e.login_id, e.first_name, e.last_name, e.avatar_url,
         d.name AS department_name,
         lr.leave_type_id, lt.name AS leave_type_name, lt.is_paid,
-        lr.start_date, lr.end_date, lr.days, lr.reason, lr.attachment_url, lr.status,
-        lr.reviewed_by, CONCAT(r.first_name, ' ', r.last_name) AS reviewer_name,
+        lr.start_date, lr.end_date, lr.days,
+        lr.reason, lr.attachment_url, lr.status,
+        lr.reviewed_by,
+        (r.first_name || ' ' || r.last_name) AS reviewer_name,
         lr.review_comment, lr.reviewed_at, lr.created_at
       FROM leave_requests lr
-      JOIN employees e ON e.id = lr.employee_id
-      LEFT JOIN departments d ON d.id = e.department_id
-      JOIN leave_types lt ON lt.id = lr.leave_type_id
-      LEFT JOIN employees r ON r.id = lr.reviewed_by
+      JOIN employees e   ON e.id  = lr.employee_id
+      LEFT JOIN departments d ON d.id  = e.department_id
+      JOIN leave_types lt    ON lt.id = lr.leave_type_id
+      LEFT JOIN employees r  ON r.id  = lr.reviewed_by
       ${whereClause}
       ORDER BY lr.created_at DESC
-      LIMIT ? OFFSET ?
+      LIMIT  $${limitIdx}
+      OFFSET $${offsetIdx}
     `;
 
     const countSql = `
       SELECT COUNT(*) AS total
-      FROM leave_requests lr
-      JOIN employees e ON e.id = lr.employee_id
-      ${whereClause}
+        FROM leave_requests lr
+        JOIN employees e ON e.id = lr.employee_id
+       ${whereClause}
     `;
 
-    const [rows] = await this.db.query(sql, [...params, limit, offset], "LeaveRepository.findRequestsList");
-    const [countRows] = await this.db.query(countSql, params, "LeaveRepository.countRequestsList");
+    const [dataResult, countResult] = await Promise.all([
+      this._query(sql, [...params, limit, offset]),
+      this._query(countSql, params),
+    ]);
 
     return {
-      items: rows.map((r) => this.toCamelCase(r)),
-      total: Number(countRows[0]?.total || 0)
+      items: dataResult.rows.map((r) => this.toCamelCase(r)),
+      total: Number(countResult.rows[0]?.total ?? 0),
     };
   }
 
   /**
-   * Finds all approved leaves in a given year for company calendar.
+   * Returns all approved leaves for a company in a given year for the calendar view.
+   * PostgreSQL uses EXTRACT(YEAR FROM …) instead of MySQL's YEAR(…).
+   *
    * @param {number} companyId
    * @param {number} year
-   * @returns {Promise<Array<object>>}
+   * @returns {Promise<object[]>}
    */
   async findCalendarLeaves(companyId, year) {
-    const sql = `
-      SELECT 
-        lr.id, lr.employee_id, e.first_name, e.last_name,
-        lr.start_date, lr.end_date, lr.days, lt.name AS leave_type_name
-      FROM leave_requests lr
-      JOIN employees e ON e.id = lr.employee_id
-      JOIN leave_types lt ON lt.id = lr.leave_type_id
-      WHERE e.company_id = ? AND lr.status = 'approved'
-        AND (YEAR(lr.start_date) = ? OR YEAR(lr.end_date) = ?)
-      ORDER BY lr.start_date ASC
-    `;
-    const [rows] = await this.db.query(sql, [companyId, year, year], "LeaveRepository.findCalendarLeaves");
-    return rows.map((r) => this.toCamelCase(r));
+    const result = await this._query(
+      `SELECT
+         lr.id, lr.employee_id,
+         e.first_name, e.last_name,
+         lr.start_date, lr.end_date, lr.days,
+         lt.name AS leave_type_name
+       FROM leave_requests lr
+       JOIN employees   e  ON e.id  = lr.employee_id
+       JOIN leave_types lt ON lt.id = lr.leave_type_id
+       WHERE e.company_id = $1
+         AND lr.status    = 'approved'
+         AND (EXTRACT(YEAR FROM lr.start_date) = $2
+              OR EXTRACT(YEAR FROM lr.end_date) = $2)
+       ORDER BY lr.start_date ASC`,
+      [companyId, year]
+    );
+    return result.rows.map((r) => this.toCamelCase(r));
   }
 }

@@ -1,360 +1,272 @@
-import bcrypt from "bcrypt";
-import mysql from "mysql2/promise";
-import { env } from "../config/env.js";
-import { SalaryCalculator } from "../utils/SalaryCalculator.js";
-import { DateUtils } from "../utils/DateUtils.js";
+/**
+ * @fileoverview Demo seed script.
+ *
+ * Populates the `dayflow` database with realistic demo data so the frontend
+ * never looks empty on first run.  This script is fully idempotent — run it
+ * as many times as you like.  It deletes existing data in dependency order
+ * and reinserts cleanly.
+ *
+ * Every seeded user can log in with the password:  Password@123
+ *
+ * Usage:
+ *   npm run db:seed
+ */
 
-async function runSeed() {
-  process.stdout.write("Starting database seeding...\n");
+import pg     from 'pg';
+import dotenv from 'dotenv';
 
-  const connection = await mysql.createConnection({
-    host: env.DB_HOST,
-    port: env.DB_PORT,
-    user: env.DB_USER,
-    password: env.DB_PASSWORD,
-    database: env.DB_NAME,
-    multipleStatements: true,
-    dateStrings: true
-  });
+dotenv.config();
+
+// ── bcrypt hash of "Password@123" with 10 rounds ──────────────────────────────
+// Pre-computed so the seed runs fast and doesn't need bcrypt as a dependency.
+const PW_HASH = '$2b$10$6N0JsxShJDLITdCGF9lBMe8xBxs7ohU0cLp8R4NCYubReDPkwwvmq';
+
+const client = new pg.Client({
+  host:     process.env.DB_HOST     || '127.0.0.1',
+  port:     process.env.DB_PORT     || 5432,
+  user:     process.env.DB_USER     || 'postgres',
+  password: process.env.DB_PASSWORD || 'maha8290',
+  database: process.env.DB_NAME     || 'dayflow',
+  ssl: false,
+});
+
+async function seed() {
+  await client.connect();
+  console.log('🌱  Starting seed…');
 
   try {
-    const passwordHash = await bcrypt.hash("Password@123", env.BCRYPT_ROUNDS);
-    const currentYear = new Date().getFullYear();
+    await client.query('BEGIN');
 
-    // 1. Company
-    await connection.query(`
-      INSERT INTO companies (id, name, code, logo_url, phone)
-      VALUES (1, 'Odoo India', 'OI', '/uploads/company-logo.png', '+91 79 4050 0000')
-      ON DUPLICATE KEY UPDATE name = VALUES(name), code = VALUES(code);
+    // ── Wipe existing data in reverse dependency order ────────────────────────
+    await client.query('DELETE FROM audit_logs');
+    await client.query('DELETE FROM leave_requests');
+    await client.query('DELETE FROM leave_allocations');
+    await client.query('DELETE FROM leave_types');
+    await client.query('DELETE FROM attendance');
+    await client.query('DELETE FROM salary_components');
+    await client.query('DELETE FROM salary_structures');
+    await client.query('DELETE FROM employee_skills');
+    await client.query('DELETE FROM employees');
+    await client.query('DELETE FROM login_id_sequences');
+    await client.query('DELETE FROM departments');
+    await client.query('DELETE FROM companies');
+    await client.query('DELETE FROM holidays');
+
+    // ── 1. Company ─────────────────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO companies (id, name, code, phone)
+      OVERRIDING SYSTEM VALUE
+      VALUES (1, 'Odoo India', 'OI', '+91 9876500000')
+    `);
+    // Reset the sequence so the next auto-generated id continues from 2.
+    await client.query(`SELECT setval('companies_id_seq', 1, true)`);
+    console.log('  ✓ Company — Odoo India');
+
+    // ── 2. Departments ─────────────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO departments (id, company_id, name) OVERRIDING SYSTEM VALUE VALUES
+        (1, 1, 'Engineering'),
+        (2, 1, 'Human Resources'),
+        (3, 1, 'Sales'),
+        (4, 1, 'Design')
+    `);
+    await client.query(`SELECT setval('departments_id_seq', 4, true)`);
+    console.log('  ✓ Departments — Engineering, HR, Sales, Design');
+
+    // ── 3. Login ID sequences ─────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO login_id_sequences (company_id, join_year, last_serial) VALUES
+        (1, 2022, 2),
+        (1, 2023, 2),
+        (1, 2026, 1)
     `);
 
-    // 2. Departments
-    const departments = ["Engineering", "Human Resources", "Sales", "Finance"];
-    for (let i = 0; i < departments.length; i++) {
-      await connection.query(`
-        INSERT INTO departments (id, company_id, name)
-        VALUES (?, 1, ?)
-        ON DUPLICATE KEY UPDATE name = VALUES(name);
-      `, [i + 1, departments[i]]);
-    }
+    // ── 4. Employees ──────────────────────────────────────────────────────────
+    // Inserted in two batches because manager_id is a self-reference:
+    // first insert the managers, then the reports.
+    await client.query(`
+      INSERT INTO employees (
+        id, company_id, login_id, work_email, password_hash,
+        must_change_password, role, first_name, last_name, phone,
+        job_position, department_id, manager_id, work_location,
+        date_of_joining, emp_code, dob, gender, marital_status,
+        nationality, personal_email, address, bank_name,
+        account_number, ifsc, pan, uan, about
+      ) OVERRIDING SYSTEM VALUE VALUES
+      -- Admin (no manager)
+      (1, 1, 'OIADSH20220001', 'admin@odooindia.com', $1,
+        false, 'admin', 'Aditya', 'Sharma', '+919876500001',
+        'HR Director', 2, NULL, 'Bangalore',
+        '2022-01-10', 'EMP001', '1990-04-12', 'male', 'married',
+        'Indian', 'aditya.s@gmail.com', 'MG Road, Bangalore', 'HDFC Bank',
+        '50100234567890', 'HDFC0001234', 'ABCPS1234K', '100200300400',
+        'Leads people operations at Odoo India.'),
 
-    // 3. Leave Types
-    const leaveTypes = [
-      { id: 1, name: "Casual Leave", isPaid: 1, requiresAttachment: 0, defaultDays: 12.0 },
-      { id: 2, name: "Sick Leave", isPaid: 1, requiresAttachment: 1, defaultDays: 10.0 },
-      { id: 3, name: "Unpaid Leave", isPaid: 0, requiresAttachment: 0, defaultDays: 0.0 }
-    ];
-    for (const lt of leaveTypes) {
-      await connection.query(`
-        INSERT INTO leave_types (id, company_id, name, is_paid, requires_attachment, default_days)
-        VALUES (?, 1, ?, ?, ?, ?)
-        ON DUPLICATE KEY UPDATE name = VALUES(name), is_paid = VALUES(is_paid), requires_attachment = VALUES(requires_attachment), default_days = VALUES(default_days);
-      `, [lt.id, lt.name, lt.isPaid, lt.requiresAttachment, lt.defaultDays]);
-    }
+      -- Senior Engineer (reports to Admin)
+      (2, 1, 'OIJODO20220002', 'john.doe@odooindia.com', $1,
+        false, 'employee', 'John', 'Doe', '+919876500002',
+        'Senior Software Engineer', 1, 1, 'Bangalore',
+        '2022-03-01', 'EMP002', '1995-08-21', 'male', 'single',
+        'Indian', 'john.doe@gmail.com', 'Indiranagar, Bangalore', 'ICICI Bank',
+        '00112345678901', 'ICIC0000112', 'AAAPJ5678L', '100200300401',
+        'Backend engineer who likes clean database design.'),
 
-    // 4. Public Holidays
-    const holidays = [
-      { date: `${currentYear}-01-26`, name: "Republic Day" },
-      { date: `${currentYear}-03-25`, name: "Holi" },
-      { date: `${currentYear}-08-15`, name: "Independence Day" },
-      { date: `${currentYear}-10-02`, name: "Gandhi Jayanti" },
-      { date: `${currentYear}-11-01`, name: "Diwali" },
-      { date: `${currentYear}-12-25`, name: "Christmas" }
-    ];
-    for (const h of holidays) {
-      await connection.query(`
-        INSERT INTO holidays (company_id, holiday_date, name)
-        VALUES (1, ?, ?)
-        ON DUPLICATE KEY UPDATE name = VALUES(name);
-      `, [h.date, h.name]);
-    }
+      -- HR Officer (reports to Admin)
+      (3, 1, 'OIPRME20230001', 'priya.mehta@odooindia.com', $1,
+        false, 'hr', 'Priya', 'Mehta', '+919876500003',
+        'HR Officer', 2, 1, 'Pune',
+        '2023-06-15', 'EMP003', '1996-11-05', 'female', 'single',
+        'Indian', 'priya.m@gmail.com', 'Koregaon Park, Pune', 'SBI',
+        '30012345678', 'SBIN0004321', 'BBBPM9012M', '100200300402',
+        'Handles onboarding and time-off approvals.'),
 
-    // 5. Employees
-    const employees = [
-      {
-        id: 1,
-        loginId: "OIADSH20220001",
-        email: "amit.sharma@odooindia.com",
-        role: "admin",
-        firstName: "Amit",
-        lastName: "Sharma",
-        phone: "+91 98765 43210",
-        jobPosition: "Managing Director",
-        departmentId: 1,
-        managerId: null,
-        doj: "2022-01-10",
-        monthlyWage: 150000.0,
-        gender: "Male",
-        pan: "ABCDE1234F"
-      },
-      {
-        id: 2,
-        loginId: "OIPRSH20230001",
-        email: "priya.sharma@odooindia.com",
-        role: "hr",
-        firstName: "Priya",
-        lastName: "Sharma",
-        phone: "+91 98765 43211",
-        jobPosition: "HR Lead",
-        departmentId: 2,
-        managerId: 1,
-        doj: "2023-03-01",
-        monthlyWage: 90000.0,
-        gender: "Female",
-        pan: "ABCDE1235G"
-      },
-      {
-        id: 3,
-        loginId: "OIRAVE20230002",
-        email: "rahul.verma@odooindia.com",
-        role: "employee",
-        firstName: "Rahul",
-        lastName: "Verma",
-        phone: "+91 98765 43212",
-        jobPosition: "Senior Software Engineer",
-        departmentId: 1,
-        managerId: 1,
-        doj: "2023-06-15",
-        monthlyWage: 80000.0,
-        gender: "Male",
-        pan: "ABCDE1236H"
-      },
-      {
-        id: 4,
-        loginId: "OIANKA20240001",
-        email: "ananya.kapoor@odooindia.com",
-        role: "employee",
-        firstName: "Ananya",
-        lastName: "Kapoor",
-        phone: "+91 98765 43213",
-        jobPosition: "Software Engineer",
-        departmentId: 1,
-        managerId: 3,
-        doj: "2024-01-15",
-        monthlyWage: 60000.0,
-        gender: "Female",
-        pan: "ABCDE1237I"
-      },
-      {
-        id: 5,
-        loginId: "OIVIRA20240002",
-        email: "vikram.rao@odooindia.com",
-        role: "employee",
-        firstName: "Vikram",
-        lastName: "Rao",
-        phone: "+91 98765 43214",
-        jobPosition: "Sales Lead",
-        departmentId: 3,
-        managerId: 1,
-        doj: "2024-02-01",
-        monthlyWage: 75000.0,
-        gender: "Male",
-        pan: "ABCDE1238J"
-      },
-      {
-        id: 6,
-        loginId: "OINEGU20240003",
-        email: "neha.gupta@odooindia.com",
-        role: "employee",
-        firstName: "Neha",
-        lastName: "Gupta",
-        phone: "+91 98765 43215",
-        jobPosition: "Sales Executive",
-        departmentId: 3,
-        managerId: 5,
-        doj: "2024-03-10",
-        monthlyWage: 45000.0,
-        gender: "Female",
-        pan: "ABCDE1239K"
-      },
-      {
-        id: 7,
-        loginId: "OISYME20240004",
-        email: "sameer.mehta@odooindia.com",
-        role: "employee",
-        firstName: "Sameer",
-        lastName: "Mehta",
-        phone: "+91 98765 43216",
-        jobPosition: "Financial Analyst",
-        departmentId: 4,
-        managerId: 1,
-        doj: "2024-04-01",
-        monthlyWage: 55000.0,
-        gender: "Male",
-        pan: "ABCDE1240L"
-      },
-      {
-        id: 8,
-        loginId: "OIPODE20240005",
-        email: "pooja.deshmukh@odooindia.com",
-        role: "employee",
-        firstName: "Pooja",
-        lastName: "Deshmukh",
-        phone: "+91 98765 43217",
-        jobPosition: "QA Engineer",
-        departmentId: 1,
-        managerId: 3,
-        doj: "2024-05-15",
-        monthlyWage: 50000.0,
-        gender: "Female",
-        pan: "ABCDE1241M"
-      }
-    ];
+      -- Frontend Engineer (reports to John)
+      (4, 1, 'OIRAVE20230002', 'rahul.verma@odooindia.com', $1,
+        false, 'employee', 'Rahul', 'Verma', '+919876500004',
+        'Frontend Engineer', 1, 2, 'Bangalore',
+        '2023-07-01', 'EMP004', '1998-02-18', 'male', 'single',
+        'Indian', 'rahul.v@gmail.com', 'HSR Layout, Bangalore', 'Axis Bank',
+        '91800012345', 'UTIB0000918', 'CCCPV3456N', '100200300403',
+        'React developer, design systems enthusiast.'),
 
-    for (const emp of employees) {
-      await connection.query(`
-        INSERT INTO employees (
-          id, company_id, login_id, work_email, password_hash, must_change_password,
-          role, first_name, last_name, phone, job_position, department_id,
-          manager_id, date_of_joining, emp_code, gender, nationality, pan, status
-        ) VALUES (?, 1, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Indian', ?, 'active')
-        ON DUPLICATE KEY UPDATE
-          role = VALUES(role), first_name = VALUES(first_name), last_name = VALUES(last_name),
-          department_id = VALUES(department_id), manager_id = VALUES(manager_id),
-          job_position = VALUES(job_position), status = 'active';
-      `, [
-        emp.id, emp.loginId, emp.email, passwordHash, emp.role, emp.firstName,
-        emp.lastName, emp.phone, emp.jobPosition, emp.departmentId, emp.managerId,
-        emp.doj, `EMP${String(emp.id).padStart(3, "0")}`, emp.gender, emp.pan
-      ]);
+      -- Designer (reports to John, first-login password change required)
+      (5, 1, 'OIAIKH20260001', 'aisha.khan@odooindia.com', $1,
+        true, 'employee', 'Aisha', 'Khan', '+919876500005',
+        'UI/UX Designer', 4, 2, 'Remote',
+        '2026-01-05', 'EMP005', '1999-09-30', 'female', 'single',
+        'Indian', 'aisha.k@gmail.com', 'Jaipur, Rajasthan', 'Kotak Bank',
+        '40011223344', 'KKBK0000123', 'DDDPK7890P', '100200300404',
+        'Designs the product experience end to end.')
+    `, [PW_HASH]);
 
-      // Seed Skills
-      await connection.query(`DELETE FROM employee_skills WHERE employee_id = ?`, [emp.id]);
-      await connection.query(`
-        INSERT INTO employee_skills (employee_id, name, kind)
-        VALUES (?, 'Problem Solving', 'skill'), (?, 'Certified Professional', 'certification');
-      `, [emp.id, emp.id]);
+    await client.query(`SELECT setval('employees_id_seq', 5, true)`);
+    console.log('  ✓ Employees — 1 Admin, 1 HR, 3 Employees');
 
-      // Seed Salary Structure & Components
-      await connection.query(`
-        INSERT INTO salary_structures (employee_id, wage_type, monthly_wage, working_days_per_week, break_minutes, effective_from)
-        VALUES (?, 'fixed', ?, 5, 60, ?)
-        ON DUPLICATE KEY UPDATE monthly_wage = VALUES(monthly_wage), effective_from = VALUES(effective_from);
-      `, [emp.id, emp.monthlyWage, emp.doj]);
-
-      const [structRows] = await connection.query(`SELECT id FROM salary_structures WHERE employee_id = ?`, [emp.id]);
-      const structId = structRows[0].id;
-      await connection.query(`DELETE FROM salary_components WHERE salary_structure_id = ?`, [structId]);
-
-      const components = SalaryCalculator.computeBreakdown(emp.monthlyWage);
-      for (const comp of components) {
-        await connection.query(`
-          INSERT INTO salary_components (salary_structure_id, name, category, computation_type, rate, amount, sort_order)
-          VALUES (?, ?, ?, ?, ?, ?, ?);
-        `, [structId, comp.name, comp.category, comp.computationType, comp.rate, comp.amount, comp.sortOrder]);
-      }
-
-      // Seed Leave Allocations
-      for (const lt of leaveTypes) {
-        await connection.query(`
-          INSERT INTO leave_allocations (employee_id, leave_type_id, year, allocated_days, used_days)
-          VALUES (?, ?, ?, ?, 0.0)
-          ON DUPLICATE KEY UPDATE allocated_days = VALUES(allocated_days);
-        `, [emp.id, lt.id, currentYear, lt.defaultDays]);
-      }
-    }
-
-    // 6. Update Sequence Table
-    await connection.query(`
-      INSERT INTO login_id_sequences (company_id, join_year, last_serial)
-      VALUES (1, 2022, 1), (1, 2023, 2), (1, 2024, 5)
-      ON DUPLICATE KEY UPDATE last_serial = VALUES(last_serial);
+    // ── 5. Skills ─────────────────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO employee_skills (employee_id, name, kind) VALUES
+        (2, 'Node.js',               'skill'),
+        (2, 'MySQL',                 'skill'),
+        (2, 'AWS Certified Developer','certification'),
+        (4, 'React',                 'skill'),
+        (4, 'Tailwind CSS',          'skill'),
+        (5, 'Figma',                 'skill'),
+        (5, 'User Research',         'skill')
     `);
+    console.log('  ✓ Skills — 7 entries');
 
-    // 7. Seed Leave Requests
-    await connection.query(`DELETE FROM leave_requests WHERE employee_id IN (1,2,3,4,5,6,7,8)`);
-    // 1 approved request (Rahul Verma, Casual Leave, 2 days)
-    const approvedStart = `${currentYear}-07-10`;
-    const approvedEnd = `${currentYear}-07-11`;
-    await connection.query(`
-      INSERT INTO leave_requests (id, employee_id, leave_type_id, start_date, end_date, days, reason, status, reviewed_by, review_comment, reviewed_at)
-      VALUES (1, 3, 1, ?, ?, 2.0, 'Family function', 'approved', 1, 'Approved enjoy', NOW());
-    `, [approvedStart, approvedEnd]);
-    await connection.query(`UPDATE leave_allocations SET used_days = 2.0 WHERE employee_id = 3 AND leave_type_id = 1 AND year = ?`, [currentYear]);
-
-    // 2 pending requests
-    await connection.query(`
-      INSERT INTO leave_requests (id, employee_id, leave_type_id, start_date, end_date, days, reason, status)
-      VALUES 
-        (2, 4, 1, '${currentYear}-09-02', '${currentYear}-09-03', 2.0, 'Personal work', 'pending'),
-        (3, 5, 2, '${currentYear}-09-10', '${currentYear}-09-10', 1.0, 'Doctor appointment', 'pending');
+    // ── 6. Salary structures ──────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO salary_structures (id, employee_id, monthly_wage, working_days_per_week, break_minutes, effective_from)
+      OVERRIDING SYSTEM VALUE VALUES
+        (1, 2, 50000.00, 5, 60, '2022-03-01'),
+        (2, 4, 35000.00, 5, 60, '2023-07-01'),
+        (3, 5, 42000.00, 5, 45, '2026-01-05')
     `);
+    await client.query(`SELECT setval('salary_structures_id_seq', 3, true)`);
 
-    // 1 rejected request
-    await connection.query(`
-      INSERT INTO leave_requests (id, employee_id, leave_type_id, start_date, end_date, days, reason, status, reviewed_by, review_comment, reviewed_at)
-      VALUES (4, 6, 1, '${currentYear}-06-01', '${currentYear}-06-05', 5.0, 'Vacation', 'rejected', 2, 'Critical project milestone', NOW());
+    await client.query(`
+      INSERT INTO salary_components (salary_structure_id, name, category, computation_type, rate, amount, sort_order) VALUES
+        -- John Doe's salary breakdown (₹50 000/month)
+        (1, 'Basic',                    'earning',               'percent_of_wage',  50.00, 25000.00, 1),
+        (1, 'House Rent Allowance',     'earning',               'percent_of_basic', 50.00, 12500.00, 2),
+        (1, 'Standard Allowance',       'earning',               'percent_of_basic', 16.67,  4167.50, 3),
+        (1, 'Performance Bonus',        'earning',               'percent_of_basic',  8.33,  2082.50, 4),
+        (1, 'Leave Travel Allowance',   'earning',               'percent_of_basic',  8.33,  2082.50, 5),
+        (1, 'Fixed Allowance',          'earning',               'remainder',         0.00,  4167.50, 6),
+        (1, 'Provident Fund (Employer)','employer_contribution', 'percent_of_basic', 12.00,  3000.00, 7),
+        (1, 'Provident Fund (Employee)','deduction',             'percent_of_basic', 12.00,  3000.00, 8),
+        (1, 'Professional Tax',         'deduction',             'fixed',             0.00,   200.00, 9)
     `);
+    console.log('  ✓ Salary structures + components');
 
-    // 8. Seed Attendance for last 10 working days
-    await connection.query(`DELETE FROM attendance WHERE employee_id IN (1,2,3,4,5,6,7,8)`);
+    // ── 7. Leave types ────────────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO leave_types (id, company_id, name, is_paid, requires_attachment, default_days)
+      OVERRIDING SYSTEM VALUE VALUES
+        (1, 1, 'Paid Time Off',  true,  false, 24),
+        (2, 1, 'Sick Time Off',  true,  true,   7),
+        (3, 1, 'Unpaid Leave',   false, false,  0)
+    `);
+    await client.query(`SELECT setval('leave_types_id_seq', 3, true)`);
+    console.log('  ✓ Leave types — PTO, Sick, Unpaid');
 
-    const pastWorkingDates = [];
-    let curDate = new Date();
-    while (pastWorkingDates.length < 10) {
-      curDate.setDate(curDate.getDate() - 1);
-      const isWknd = DateUtils.isWeekend(curDate, 5);
-      const dateStr = DateUtils.toDateString(curDate);
-      const isHoliday = holidays.some((h) => h.date === dateStr);
-      if (!isWknd && !isHoliday) {
-        pastWorkingDates.unshift(dateStr);
-      }
-    }
+    // ── 8. Leave allocations ──────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO leave_allocations (employee_id, leave_type_id, year, allocated_days, used_days) VALUES
+        (2, 1, 2026, 24, 3), (2, 2, 2026, 7, 1), (2, 3, 2026, 0, 0),
+        (4, 1, 2026, 24, 5), (4, 2, 2026, 7, 0), (4, 3, 2026, 0, 0),
+        (5, 1, 2026, 24, 0), (5, 2, 2026, 7, 2), (5, 3, 2026, 0, 0),
+        (3, 1, 2026, 24, 2), (3, 2, 2026, 7, 0), (3, 3, 2026, 0, 0)
+    `);
+    console.log('  ✓ Leave allocations — 12 entries');
 
-    for (let d = 0; d < pastWorkingDates.length; d++) {
-      const workDate = pastWorkingDates[d];
-      for (const emp of employees) {
-        // Special cases for demo:
-        // Employee 4 had one half_day on index 3
-        // Employee 6 was absent on index 5
-        let status = "present";
-        let checkIn = `${workDate} 09:30:00`;
-        let checkOut = `${workDate} 18:30:00`;
-        let workMins = 540;
-        let extraMins = 60;
+    // ── 9. Attendance (last working week) ─────────────────────────────────────
+    await client.query(`
+      INSERT INTO attendance (employee_id, work_date, check_in, check_out, work_minutes, extra_minutes, status) VALUES
+        -- John Doe
+        (2,'2026-08-17','2026-08-17 10:00:00+05:30','2026-08-17 19:00:00+05:30', 540, 60,'present'),
+        (2,'2026-08-18','2026-08-18 10:05:00+05:30','2026-08-18 18:45:00+05:30', 520, 40,'present'),
+        (2,'2026-08-19','2026-08-19 09:55:00+05:30','2026-08-19 19:10:00+05:30', 555, 75,'present'),
+        (2,'2026-08-20', NULL, NULL, 0, 0, 'leave'),
+        (2,'2026-08-21','2026-08-21 10:15:00+05:30','2026-08-21 19:00:00+05:30', 525, 45,'present'),
+        -- Rahul Verma
+        (4,'2026-08-17','2026-08-17 09:50:00+05:30','2026-08-17 18:30:00+05:30', 520, 40,'present'),
+        (4,'2026-08-18','2026-08-18 10:10:00+05:30','2026-08-18 14:00:00+05:30', 230,  0,'half_day'),
+        (4,'2026-08-19','2026-08-19 10:00:00+05:30','2026-08-19 19:00:00+05:30', 540, 60,'present'),
+        (4,'2026-08-20','2026-08-20 10:00:00+05:30','2026-08-20 18:50:00+05:30', 530, 50,'present'),
+        (4,'2026-08-21', NULL, NULL, 0, 0,'absent'),
+        -- Aisha Khan
+        (5,'2026-08-19','2026-08-19 10:30:00+05:30','2026-08-19 19:30:00+05:30', 540, 60,'present'),
+        (5,'2026-08-20','2026-08-20 10:20:00+05:30','2026-08-20 19:00:00+05:30', 520, 40,'present'),
+        (5,'2026-08-21','2026-08-21 10:00:00+05:30','2026-08-21 19:00:00+05:30', 540, 60,'present')
+    `);
+    console.log('  ✓ Attendance — 13 records across last working week');
 
-        if (emp.id === 4 && d === 3) {
-          status = "half_day";
-          checkIn = `${workDate} 09:30:00`;
-          checkOut = `${workDate} 13:30:00`;
-          workMins = 240;
-          extraMins = 0;
-        } else if (emp.id === 6 && d === 5) {
-          status = "absent";
-          checkIn = null;
-          checkOut = null;
-          workMins = 0;
-          extraMins = 0;
-        }
+    // ── 10. Leave requests (one of each status for the demo) ──────────────────
+    await client.query(`
+      INSERT INTO leave_requests (employee_id, leave_type_id, start_date, end_date, days, reason, status, reviewed_by, review_comment, reviewed_at) VALUES
+        (2, 1,'2026-08-20','2026-08-20', 1, 'Family function',             'approved', 1, 'Approved, enjoy!',                 '2026-08-18 11:00:00+05:30'),
+        (4, 2,'2026-08-25','2026-08-26', 2, 'Fever, doctor advised rest',  'pending',  NULL, NULL,                             NULL),
+        (5, 1,'2026-08-28','2026-08-29', 2, 'Short trip',                  'pending',  NULL, NULL,                             NULL),
+        (4, 3,'2026-08-14','2026-08-14', 1, 'Personal work',               'rejected', 1, 'Team is at peak sprint load',     '2026-08-12 16:30:00+05:30')
+    `);
+    console.log('  ✓ Leave requests — approved / pending / pending / rejected');
 
-        await connection.query(`
-          INSERT INTO attendance (employee_id, work_date, check_in, check_out, work_minutes, extra_minutes, status)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-          ON DUPLICATE KEY UPDATE check_in = VALUES(check_in), check_out = VALUES(check_out), status = VALUES(status);
-        `, [emp.id, workDate, checkIn, checkOut, workMins, extraMins, status]);
-      }
-    }
+    // ── 11. Holidays ──────────────────────────────────────────────────────────
+    await client.query(`
+      INSERT INTO holidays (company_id, holiday_date, name) VALUES
+        (1, '2026-01-26', 'Republic Day'),
+        (1, '2026-03-28', 'Holi'),
+        (1, '2026-08-15', 'Independence Day'),
+        (1, '2026-10-02', 'Gandhi Jayanti'),
+        (1, '2026-10-20', 'Diwali'),
+        (1, '2026-12-25', 'Christmas')
+    `);
+    console.log('  ✓ Holidays — 6 national / company holidays for 2026');
 
-    process.stdout.write("\n========================================================\n");
-    process.stdout.write("  Database Seed Complete - Demo Credentials:\n");
-    process.stdout.write("========================================================\n");
-    process.stdout.write("All Accounts Password: Password@123\n\n");
-    process.stdout.write("Admin:    OIADSH20220001 | amit.sharma@odooindia.com\n");
-    process.stdout.write("HR:       OIPRSH20230001 | priya.sharma@odooindia.com\n");
-    process.stdout.write("Employee: OIRAVE20230002 | rahul.verma@odooindia.com\n");
-    process.stdout.write("Employee: OIANKA20240001 | ananya.kapoor@odooindia.com\n");
-    process.stdout.write("Employee: OIVIRA20240002 | vikram.rao@odooindia.com\n");
-    process.stdout.write("Employee: OINEGU20240003 | neha.gupta@odooindia.com\n");
-    process.stdout.write("Employee: OISYME20240004 | sameer.mehta@odooindia.com\n");
-    process.stdout.write("Employee: OIPODE20240005 | pooja.deshmukh@odooindia.com\n");
-    process.stdout.write("========================================================\n\n");
+    await client.query('COMMIT');
 
+    console.log('');
+    console.log('🎉  Seed complete!  Login credentials for every account:');
+    console.log('    Password:  Password@123');
+    console.log('');
+    console.log('    Login ID           Role       Name');
+    console.log('    ─────────────────────────────────────────────');
+    console.log('    OIADSH20220001     Admin      Aditya Sharma');
+    console.log('    OIPRME20230001     HR         Priya Mehta');
+    console.log('    OIJODO20220002     Employee   John Doe');
+    console.log('    OIRAVE20230002     Employee   Rahul Verma');
+    console.log('    OIAIKH20260001     Employee   Aisha Khan  (must change password on first login)');
   } catch (err) {
-    process.stderr.write(`Database seed failed: ${err.message}\n`);
-    process.exit(1);
+    await client.query('ROLLBACK');
+    throw err;
   } finally {
-    await connection.end();
+    await client.end();
   }
 }
 
-runSeed();
+seed().catch((err) => {
+  console.error('❌  Seed failed:', err.message);
+  process.exit(1);
+});

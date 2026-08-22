@@ -1,210 +1,251 @@
 /**
- * @file AttendanceRepository.js
- * Owns raw SQL queries for attendance recording, check-ins, monthly logs, and roster reporting.
- * Must not contain HTTP logic or business rules.
+ * @fileoverview AttendanceRepository — data access for check-ins, check-outs, monthly logs, and rosters.
+ *
+ * Notable PostgreSQL conversions from the MySQL version:
+ * - ON DUPLICATE KEY UPDATE  →  INSERT … ON CONFLICT … DO UPDATE
+ * - LIMIT/OFFSET still work the same way in PostgreSQL
+ * - CONCAT(a, b)             →  (a || b)  or we just keep CONCAT (PostgreSQL supports it too)
  */
 
-import { BaseRepository } from "../../core/BaseRepository.js";
+import { BaseRepository } from '../../core/BaseRepository.js';
 
 export class AttendanceRepository extends BaseRepository {
-  /**
-   * @param {import("../../config/database.js").Database} db
-   */
+  /** @param {import('../../config/database.js').Database} db */
   constructor(db) {
     super(
       db,
-      "attendance",
-      ["id", "employee_id", "work_date", "check_in", "check_out", "work_minutes", "extra_minutes", "status"],
-      ["id", "work_date", "check_in"]
+      'attendance',
+      ['id', 'employee_id', 'work_date', 'check_in', 'check_out', 'work_minutes', 'extra_minutes', 'status'],
+      ['id', 'work_date', 'check_in']
     );
   }
 
   /**
-   * Finds attendance record for a specific employee and date.
+   * Finds the attendance record for one employee on one specific day.
+   * Returns null if the employee hasn't checked in yet.
+   *
    * @param {number} employeeId
-   * @param {string} workDate YYYY-MM-DD
-   * @param {import("mysql2/promise").Connection} [conn]
+   * @param {string} workDate - YYYY-MM-DD
    * @returns {Promise<Record<string, any>|null>}
    */
-  async findByEmployeeAndDate(employeeId, workDate, conn = null) {
-    const sql = `SELECT * FROM attendance WHERE employee_id = ? AND work_date = ? LIMIT 1`;
-    const [rows] = await this.db.query(sql, [employeeId, workDate], "AttendanceRepository.findByEmployeeAndDate", conn || this.activeConn);
-    return rows.length ? this.toCamelCase(rows[0]) : null;
+  async findByEmployeeAndDate(employeeId, workDate) {
+    const result = await this._query(
+      `SELECT * FROM attendance WHERE employee_id = $1 AND work_date = $2 LIMIT 1`,
+      [employeeId, workDate]
+    );
+    return result.rows.length ? this.toCamelCase(result.rows[0]) : null;
   }
 
   /**
-   * Inserts a check-in record.
+   * Records a check-in.  If a row already exists for today (shouldn't happen
+   * with our front-end checks, but just in case), we update the check-in time
+   * and flip the status back to 'present'.
+   *
    * @param {number} employeeId
-   * @param {string} workDate
-   * @param {string} checkIn
-   * @param {import("mysql2/promise").Connection} [conn]
-   * @returns {Promise<number>}
+   * @param {string} workDate   - YYYY-MM-DD
+   * @param {string} checkIn    - ISO 8601 datetime string
+   * @returns {Promise<number>} The attendance row ID
    */
-  async recordCheckIn(employeeId, workDate, checkIn, conn = null) {
-    const sql = `
-      INSERT INTO attendance (employee_id, work_date, check_in, status)
-      VALUES (?, ?, ?, 'present')
-      ON DUPLICATE KEY UPDATE check_in = VALUES(check_in), status = 'present'
-    `;
-    const [result] = await this.db.query(sql, [employeeId, workDate, checkIn], "AttendanceRepository.recordCheckIn", conn || this.activeConn);
-    return result.insertId;
+  async recordCheckIn(employeeId, workDate, checkIn) {
+    const result = await this._query(
+      `INSERT INTO attendance (employee_id, work_date, check_in, status)
+       VALUES ($1, $2, $3, 'present')
+       ON CONFLICT (employee_id, work_date)
+       DO UPDATE SET check_in = EXCLUDED.check_in, status = 'present'
+       RETURNING id`,
+      [employeeId, workDate, checkIn]
+    );
+    return result.rows[0].id;
   }
 
   /**
-   * Updates check-out details and computed work/extra minutes.
-   * @param {number} id
-   * @param {string} checkOut
+   * Records a check-out and saves the computed work / extra minutes.
+   *
+   * @param {number} id           - Attendance row ID
+   * @param {string} checkOut     - ISO 8601 datetime string
    * @param {number} workMinutes
    * @param {number} extraMinutes
-   * @param {import("mysql2/promise").Connection} [conn]
    * @returns {Promise<boolean>}
    */
-  async recordCheckOut(id, checkOut, workMinutes, extraMinutes, conn = null) {
-    const sql = `
-      UPDATE attendance
-      SET check_out = ?, work_minutes = ?, extra_minutes = ?
-      WHERE id = ?
-    `;
-    const [result] = await this.db.query(sql, [checkOut, workMinutes, extraMinutes, id], "AttendanceRepository.recordCheckOut", conn || this.activeConn);
-    return result.affectedRows > 0;
+  async recordCheckOut(id, checkOut, workMinutes, extraMinutes) {
+    const result = await this._query(
+      `UPDATE attendance
+          SET check_out     = $1,
+              work_minutes  = $2,
+              extra_minutes = $3
+        WHERE id = $4`,
+      [checkOut, workMinutes, extraMinutes, id]
+    );
+    return (result.rowCount ?? 0) > 0;
   }
 
   /**
-   * Fetches monthly attendance rows for an employee.
+   * Fetches all attendance rows for an employee within a date range.
+   * Used to build the monthly attendance calendar on the frontend.
+   *
    * @param {number} employeeId
-   * @param {string} startDate
-   * @param {string} endDate
-   * @returns {Promise<Array<Record<string, any>>>}
+   * @param {string} startDate - YYYY-MM-DD
+   * @param {string} endDate   - YYYY-MM-DD
+   * @returns {Promise<Record<string, any>[]>}
    */
   async findMonthlyRecords(employeeId, startDate, endDate) {
-    const sql = `
-      SELECT id, employee_id, work_date, check_in, check_out, work_minutes, extra_minutes, status
-      FROM attendance
-      WHERE employee_id = ? AND work_date BETWEEN ? AND ?
-      ORDER BY work_date ASC
-    `;
-    const [rows] = await this.db.query(sql, [employeeId, startDate, endDate], "AttendanceRepository.findMonthlyRecords");
-    return rows.map((r) => this.toCamelCase(r));
+    const result = await this._query(
+      `SELECT id, employee_id, work_date, check_in, check_out,
+              work_minutes, extra_minutes, status
+         FROM attendance
+        WHERE employee_id = $1
+          AND work_date BETWEEN $2 AND $3
+        ORDER BY work_date ASC`,
+      [employeeId, startDate, endDate]
+    );
+    return result.rows.map((r) => this.toCamelCase(r));
   }
 
   /**
-   * Fetches aggregated attendance counts for summary calculations.
+   * Aggregates attendance counts and total minutes for the monthly summary card.
+   *
    * @param {number} employeeId
    * @param {string} startDate
    * @param {string} endDate
-   * @returns {Promise<Record<string, number>>}
+   * @returns {Promise<{ presentCount: number, halfDayCount: number, leaveCount: number, absentCount: number, totalWorkMinutes: number, totalExtraMinutes: number }>}
    */
   async getMonthlyAggregates(employeeId, startDate, endDate) {
-    const sql = `
-      SELECT 
-        COUNT(CASE WHEN status = 'present' THEN 1 END) AS present_count,
-        COUNT(CASE WHEN status = 'half_day' THEN 1 END) AS half_day_count,
-        COUNT(CASE WHEN status = 'leave' THEN 1 END) AS leave_count,
-        COUNT(CASE WHEN status = 'absent' THEN 1 END) AS absent_count,
-        SUM(work_minutes) AS total_work_minutes,
-        SUM(extra_minutes) AS total_extra_minutes
-      FROM attendance
-      WHERE employee_id = ? AND work_date BETWEEN ? AND ?
-    `;
-    const [rows] = await this.db.query(sql, [employeeId, startDate, endDate], "AttendanceRepository.getMonthlyAggregates");
+    const result = await this._query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'present')  AS present_count,
+         COUNT(*) FILTER (WHERE status = 'half_day') AS half_day_count,
+         COUNT(*) FILTER (WHERE status = 'leave')    AS leave_count,
+         COUNT(*) FILTER (WHERE status = 'absent')   AS absent_count,
+         COALESCE(SUM(work_minutes),  0)             AS total_work_minutes,
+         COALESCE(SUM(extra_minutes), 0)             AS total_extra_minutes
+       FROM attendance
+       WHERE employee_id = $1
+         AND work_date BETWEEN $2 AND $3`,
+      [employeeId, startDate, endDate]
+    );
+    const row = result.rows[0] ?? {};
     return {
-      presentCount: Number(rows[0]?.present_count || 0),
-      halfDayCount: Number(rows[0]?.half_day_count || 0),
-      leaveCount: Number(rows[0]?.leave_count || 0),
-      absentCount: Number(rows[0]?.absent_count || 0),
-      totalWorkMinutes: Number(rows[0]?.total_work_minutes || 0),
-      totalExtraMinutes: Number(rows[0]?.total_extra_minutes || 0)
+      presentCount:      Number(row.present_count      ?? 0),
+      halfDayCount:      Number(row.half_day_count     ?? 0),
+      leaveCount:        Number(row.leave_count        ?? 0),
+      absentCount:       Number(row.absent_count       ?? 0),
+      totalWorkMinutes:  Number(row.total_work_minutes ?? 0),
+      totalExtraMinutes: Number(row.total_extra_minutes ?? 0),
     };
   }
 
   /**
-   * Retrieves company-wide daily attendance roster with employee details.
-   * @param {object} params
-   * @param {number} params.companyId
-   * @param {string} params.workDate
-   * @param {string} [params.search]
-   * @param {number} [params.departmentId]
-   * @param {number} [params.page=1]
-   * @param {number} [params.limit=20]
-   * @returns {Promise<{ items: Array<object>, total: number }>}
+   * Returns the company-wide daily roster — one row per active employee showing
+   * their attendance or leave status for a specific date.  Used by HR/admin.
+   *
+   * @param {object} p
+   * @param {number}  p.companyId
+   * @param {string}  p.workDate      - YYYY-MM-DD
+   * @param {string}  [p.search]
+   * @param {number}  [p.departmentId]
+   * @param {number}  [p.page=1]
+   * @param {number}  [p.limit=20]
+   * @returns {Promise<{ items: object[], total: number }>}
    */
   async findDailyRoster({ companyId, workDate, search, departmentId, page = 1, limit = 20 }) {
     const offset = (Math.max(1, page) - 1) * limit;
-    const conditions = ["e.company_id = ?", "e.status = 'active'"];
-    const params = [workDate, workDate, companyId];
+
+    // Base filter params — workDate used twice in JOIN conditions so listed first.
+    const params     = [workDate, workDate, companyId];
+    const conditions = [`e.company_id = $${params.length}`, `e.status = 'active'`];
 
     if (departmentId) {
-      conditions.push("e.department_id = ?");
       params.push(departmentId);
+      conditions.push(`e.department_id = $${params.length}`);
     }
     if (search) {
-      conditions.push("(e.first_name LIKE ? OR e.last_name LIKE ? OR e.login_id LIKE ?)");
       const term = `%${search}%`;
       params.push(term, term, term);
+      const n = params.length;
+      conditions.push(`(e.first_name ILIKE $${n - 2} OR e.last_name ILIKE $${n - 1} OR e.login_id ILIKE $${n})`);
     }
 
-    const whereClause = `WHERE ${conditions.join(" AND ")}`;
+    const whereClause = `WHERE ${conditions.join(' AND ')}`;
+    const limitIdx    = params.length + 1;
+    const offsetIdx   = params.length + 2;
 
     const sql = `
-      SELECT 
-        e.id AS employee_id, e.login_id, e.first_name, e.last_name, e.avatar_url,
+      SELECT
+        e.id AS employee_id, e.login_id,
+        e.first_name, e.last_name, e.avatar_url,
         d.name AS department_name,
-        a.id AS attendance_id,
+        a.id          AS attendance_id,
         a.check_in, a.check_out, a.work_minutes, a.extra_minutes,
         CASE
-          WHEN lr.id IS NOT NULL THEN 'leave'
-          WHEN a.check_in IS NOT NULL THEN COALESCE(a.status, 'present')
+          WHEN lr.id IS NOT NULL          THEN 'leave'
+          WHEN a.check_in IS NOT NULL     THEN COALESCE(a.status::text, 'present')
           ELSE 'absent'
         END AS status
       FROM employees e
       LEFT JOIN departments d ON d.id = e.department_id
-      LEFT JOIN attendance a ON a.employee_id = e.id AND a.work_date = ?
-      LEFT JOIN leave_requests lr ON lr.employee_id = e.id AND lr.status = 'approved' AND ? BETWEEN lr.start_date AND lr.end_date
+      LEFT JOIN attendance   a
+             ON a.employee_id = e.id
+            AND a.work_date   = $1::date
+      LEFT JOIN leave_requests lr
+             ON lr.employee_id = e.id
+            AND lr.status      = 'approved'
+            AND $2::date BETWEEN lr.start_date AND lr.end_date
       ${whereClause}
       ORDER BY e.first_name ASC
-      LIMIT ? OFFSET ?
+      LIMIT  $${limitIdx}
+      OFFSET $${offsetIdx}
     `;
 
-    const countSql = `
-      SELECT COUNT(*) AS total
-      FROM employees e
-      WHERE e.company_id = ? AND e.status = 'active'
-      ${departmentId ? "AND e.department_id = ?" : ""}
-      ${search ? "AND (e.first_name LIKE ? OR e.last_name LIKE ? OR e.login_id LIKE ?)" : ""}
-    `;
-
-    const countParams = [companyId];
-    if (departmentId) {countParams.push(departmentId);}
+    // Count query uses a separate, simpler param list to avoid duplication.
+    const countParams     = [companyId];
+    const countConditions = [`e.company_id = $1`, `e.status = 'active'`];
+    if (departmentId) {
+      countParams.push(departmentId);
+      countConditions.push(`e.department_id = $${countParams.length}`);
+    }
     if (search) {
       const term = `%${search}%`;
       countParams.push(term, term, term);
+      const n = countParams.length;
+      countConditions.push(`(e.first_name ILIKE $${n - 2} OR e.last_name ILIKE $${n - 1} OR e.login_id ILIKE $${n})`);
     }
+    const countSql = `SELECT COUNT(*) AS total FROM employees e WHERE ${countConditions.join(' AND ')}`;
 
-    const [rows] = await this.db.query(sql, [...params, limit, offset], "AttendanceRepository.findDailyRoster");
-    const [countRows] = await this.db.query(countSql, countParams, "AttendanceRepository.countDailyRoster");
+    const [dataResult, countResult] = await Promise.all([
+      this._query(sql, [...params, limit, offset]),
+      this._query(countSql, countParams),
+    ]);
 
     return {
-      items: rows.map((r) => this.toCamelCase(r)),
-      total: Number(countRows[0]?.total || 0)
+      items: dataResult.rows.map((r) => this.toCamelCase(r)),
+      total: Number(countResult.rows[0]?.total ?? 0),
     };
   }
 
   /**
-   * Bulk upserts attendance records as 'leave' for approved date range.
-   * @param {number} employeeId
-   * @param {string[]} dates
-   * @param {import("mysql2/promise").Connection} [conn]
+   * Marks a list of dates as 'leave' for an employee.
+   * Called atomically when a leave request is approved so the attendance
+   * calendar stays in sync with the leave record.
+   *
+   * ON CONFLICT means if the employee already has an attendance row for that
+   * day (e.g. they checked in and then their manager approved a backdated leave)
+   * we overwrite the status to 'leave'.
+   *
+   * @param {number}          employeeId
+   * @param {string[]}        dates       - Array of YYYY-MM-DD strings
+   * @param {import('pg').PoolClient} client - Transaction client
    * @returns {Promise<void>}
    */
-  async upsertLeaveDays(employeeId, dates, conn = null) {
-    if (!dates.length) {return;}
+  async upsertLeaveDays(employeeId, dates, client) {
+    if (!dates.length) return;
     for (const d of dates) {
-      const sql = `
-        INSERT INTO attendance (employee_id, work_date, status)
-        VALUES (?, ?, 'leave')
-        ON DUPLICATE KEY UPDATE status = 'leave'
-      `;
-      await this.db.query(sql, [employeeId, d], "AttendanceRepository.upsertLeaveDays", conn || this.activeConn);
+      await client.query(
+        `INSERT INTO attendance (employee_id, work_date, status)
+         VALUES ($1, $2, 'leave')
+         ON CONFLICT (employee_id, work_date)
+         DO UPDATE SET status = 'leave'`,
+        [employeeId, d]
+      );
     }
   }
 }

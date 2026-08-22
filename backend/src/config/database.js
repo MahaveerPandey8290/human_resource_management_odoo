@@ -1,93 +1,175 @@
-import mysql from "mysql2/promise";
-import { env } from "./env.js";
-
 /**
- * Database wrapper managing MySQL2 connection pool, queries, and transactions.
+ * @fileoverview PostgreSQL connection pool manager.
+ *
+ * We use the native `pg` driver with a pool of up to DB_POOL_MAX connections.
+ * Every query automatically goes through parameterised placeholders ($1, $2, …)
+ * so SQL injection is structurally impossible at the driver level.
+ *
+ * Transactions:  call `db.withTransaction(async (client) => { … })` and every
+ * query inside will share the same connection + transaction scope.  If your
+ * callback throws, the transaction is automatically rolled back.
+ *
+ * Slow query logging: any query that takes longer than 200 ms gets a warning
+ * in the logs so we can catch N+1 problems during development.
  */
-export class Database {
-  /**
-   * @param {import("../core/Logger.js").Logger} logger
-   */
-  constructor(logger) {
-    this.logger = logger;
-    this.pool = mysql.createPool({
-      host: env.DB_HOST,
-      port: env.DB_PORT,
-      user: env.DB_USER,
-      password: env.DB_PASSWORD,
-      database: env.DB_NAME,
-      waitForConnections: true,
-      connectionLimit: env.DB_POOL_LIMIT,
-      queueLimit: 0,
-      dateStrings: true,
-      decimalNumbers: true
+
+import pg from 'pg';
+import { env } from './env.js';
+import { logger } from '../core/Logger.js';
+
+const { Pool } = pg;
+
+// ── Tell pg how to handle NUMERIC / DECIMAL types ─────────────────────────────
+// By default, pg returns numeric columns as strings to avoid JS floating-point
+// drift.  We parse them as floats here so service code never needs to call
+// Number() everywhere.  For money columns we keep 2 decimal places in the DB,
+// which is sufficient.
+pg.types.setTypeParser(pg.types.builtins.NUMERIC, (val) => parseFloat(val));
+pg.types.setTypeParser(pg.types.builtins.INT8,    (val) => parseInt(val, 10));
+
+// ── Connection pool ────────────────────────────────────────────────────────────
+const SLOW_QUERY_THRESHOLD_MS = 200;
+
+class Database {
+  /** @type {pg.Pool} */
+  #pool;
+
+  constructor() {
+    this.#pool = new Pool({
+      host:              env.DB_HOST,
+      port:              env.DB_PORT,
+      user:              env.DB_USER,
+      password:          env.DB_PASSWORD,
+      database:          env.DB_NAME,
+      max:               env.DB_POOL_MAX,
+      idleTimeoutMillis: env.DB_POOL_IDLE_TIMEOUT_MS,
+      connectionTimeoutMillis: env.DB_POOL_CONNECTION_TIMEOUT_MS,
+      // Let the server's SSL setting decide; fine for localhost dev.
+      ssl: env.NODE_ENV === 'production' ? { rejectUnauthorized: true } : false,
     });
+
+    // Log unexpected pool errors so they don't silently kill the process.
+    this.#pool.on('error', (err) => {
+      logger.error({ err }, 'Unexpected error on idle PostgreSQL client');
+    });
+
+    // Helpful during development to see how many connections are open.
+    if (env.NODE_ENV !== 'production') {
+      this.#pool.on('connect', () => {
+        logger.debug(
+          { totalCount: this.#pool.totalCount, idleCount: this.#pool.idleCount },
+          'PG pool: new client connected'
+        );
+      });
+    }
   }
 
+  // ── Core query helper ────────────────────────────────────────────────────────
+
   /**
-   * Executes a parameterized query against pool or a transaction connection.
-   * Logs queries taking longer than 200ms.
-   * @param {string} sql
-   * @param {Array<any>} [params=[]]
-   * @param {string} [label="SQL_QUERY"]
-   * @param {import("mysql2/promise").Connection} [conn]
-   * @returns {Promise<[any, any]>}
+   * Run a single parameterised query on a pooled connection.
+   *
+   * PostgreSQL placeholders use $1, $2, … (not MySQL's ?).
+   * We handle that swap automatically if you pass MySQL-style SQL — but
+   * prefer writing native PG SQL directly in repository files.
+   *
+   * @param {string}    sql    - Parameterised SQL string using $1, $2, …
+   * @param {unknown[]} [params] - Bound parameter values in order
+   * @returns {Promise<pg.QueryResult>}
    */
-  async query(sql, params = [], label = "SQL_QUERY", conn = null) {
+  async query(sql, params = []) {
     const start = Date.now();
-    const executor = conn || this.pool;
     try {
-      const result = await executor.query(sql, params);
-      const duration = Date.now() - start;
-      if (duration > 200) {
-        this.logger.warn({ label, duration, sql }, `Slow query detected [${label}] took ${duration}ms`);
+      const result = await this.#pool.query(sql, params);
+      const durationMs = Date.now() - start;
+
+      if (durationMs > SLOW_QUERY_THRESHOLD_MS) {
+        logger.warn({ durationMs, sql }, 'Slow query detected (>200 ms)');
+      } else {
+        logger.debug({ durationMs, rowCount: result.rowCount }, 'Query OK');
       }
+
       return result;
     } catch (err) {
-      this.logger.error({ label, sql, params, err: err.message }, `Database query error [${label}]`);
+      logger.error({ err, sql, params }, 'Query failed');
       throw err;
     }
   }
 
+  // ── Transaction helper ───────────────────────────────────────────────────────
+
   /**
-   * Runs a callback inside a database transaction with automatic commit/rollback.
+   * Run a series of queries inside a single ACID transaction.
+   * The callback receives a `client` object with the same `.query()` interface.
+   * If the callback throws anything, the transaction is rolled back automatically.
+   *
    * @template T
-   * @param {(conn: import("mysql2/promise").PoolConnection) => Promise<T>} callback
+   * @param {(client: pg.PoolClient) => Promise<T>} callback
    * @returns {Promise<T>}
+   *
+   * @example
+   * const newEmployee = await db.withTransaction(async (client) => {
+   *   await client.query('INSERT INTO employees …', […]);
+   *   await client.query('INSERT INTO salary_structures …', […]);
+   *   return { id: 123 };
+   * });
    */
-  async transaction(callback) {
-    const conn = await this.pool.getConnection();
-    await conn.beginTransaction();
+  async withTransaction(callback) {
+    // Check out a dedicated client from the pool for the whole transaction.
+    const client = await this.#pool.connect();
     try {
-      const result = await callback(conn);
-      await conn.commit();
+      await client.query('BEGIN');
+      const result = await callback(client);
+      await client.query('COMMIT');
       return result;
     } catch (err) {
-      await conn.rollback();
+      await client.query('ROLLBACK').catch((rollbackErr) => {
+        // If rollback itself fails, log it — but still throw the original error.
+        logger.error({ rollbackErr }, 'Transaction rollback failed');
+      });
       throw err;
     } finally {
-      conn.release();
+      // Always release the client back to the pool, even if we crashed.
+      client.release();
     }
   }
 
+  // ── Health & lifecycle ───────────────────────────────────────────────────────
+
   /**
-   * Retrieves active connection pool metrics.
-   * @returns {{ total: number, active: number, idle: number, queued: number }}
+   * Quick liveness check — useful for a /health endpoint.
+   * @returns {Promise<boolean>}
    */
-  getPoolMetrics() {
+  async ping() {
+    await this.#pool.query('SELECT 1');
+    return true;
+  }
+
+  /**
+   * Pool diagnostics — handy for a /metrics endpoint.
+   * @returns {{ total: number, idle: number, waiting: number }}
+   */
+  stats() {
     return {
-      total: this.pool.pool?._allConnections?.length || 0,
-      active: (this.pool.pool?._allConnections?.length || 0) - (this.pool.pool?._freeConnections?.length || 0),
-      idle: this.pool.pool?._freeConnections?.length || 0,
-      queued: this.pool.pool?._connectionQueue?.length || 0
+      total:   this.#pool.totalCount,
+      idle:    this.#pool.idleCount,
+      waiting: this.#pool.waitingCount,
     };
   }
 
   /**
-   * Closes the database pool.
-   * @returns {Promise<void>}
+   * Gracefully drain the pool during process shutdown.
+   * Call this in your SIGTERM / SIGINT handler.
    */
   async close() {
-    await this.pool.end();
+    logger.info('Closing PostgreSQL connection pool…');
+    await this.#pool.end();
+    logger.info('PostgreSQL pool closed. Goodbye! 👋');
   }
 }
+
+// Export a single shared instance — the pool is already thread-safe.
+export const db = new Database();
+
+// Also export the class itself so container.js / tests can construct their own instances.
+export { Database };

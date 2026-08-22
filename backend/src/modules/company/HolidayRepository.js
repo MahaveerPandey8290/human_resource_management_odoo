@@ -1,53 +1,59 @@
 /**
- * @file HolidayRepository.js
- * Owns raw SQL queries for company holidays.
- * Must not contain HTTP logic or business rules.
+ * @fileoverview HolidayRepository — data access for company holidays.
  */
 
-import { BaseRepository } from "../../core/BaseRepository.js";
+import { BaseRepository } from '../../core/BaseRepository.js';
 
 export class HolidayRepository extends BaseRepository {
-  /**
-   * @param {import("../../config/database.js").Database} db
-   */
+  /** @param {import('../../config/database.js').Database} db */
   constructor(db) {
-    super(db, "holidays", ["id", "company_id", "holiday_date", "name", "created_at"], ["id", "holiday_date", "name"]);
+    super(
+      db,
+      'holidays',
+      ['id', 'company_id', 'holiday_date', 'name', 'created_at'],
+      ['id', 'holiday_date', 'name']
+    );
   }
 
   /**
-   * Finds holidays for a company in a given year.
+   * Returns all holidays for a company in a specific calendar year.
+   * Uses PostgreSQL's EXTRACT instead of MySQL's YEAR() function.
+   *
    * @param {number} companyId
    * @param {number} year
-   * @param {import("mysql2/promise").Connection} [conn]
-   * @returns {Promise<Array<Record<string, any>>>}
+   * @returns {Promise<Record<string, any>[]>}
    */
-  async findByCompanyAndYear(companyId, year, conn = null) {
-    const sql = `
-      SELECT id, company_id, holiday_date, name
-      FROM holidays
-      WHERE company_id = ? AND YEAR(holiday_date) = ?
-      ORDER BY holiday_date ASC
-    `;
-    const [rows] = await this.db.query(sql, [companyId, year], "HolidayRepository.findByCompanyAndYear", conn || this.activeConn);
-    return rows.map((r) => this.toCamelCase(r));
+  async findByCompanyAndYear(companyId, year) {
+    const result = await this._query(
+      `SELECT id, company_id, holiday_date, name
+         FROM holidays
+        WHERE company_id = $1
+          AND EXTRACT(YEAR FROM holiday_date) = $2
+        ORDER BY holiday_date ASC`,
+      [companyId, year]
+    );
+    return result.rows.map((r) => this.toCamelCase(r));
   }
 
   /**
-   * Finds holidays occurring between two dates.
+   * Returns holidays that fall within a date range.
+   * Used by the working-days calculator to skip public holidays when
+   * computing leave duration.
+   *
    * @param {number} companyId
-   * @param {string} startDate
-   * @param {string} endDate
-   * @param {import("mysql2/promise").Connection} [conn]
-   * @returns {Promise<Array<Record<string, any>>>}
+   * @param {string} startDate - YYYY-MM-DD
+   * @param {string} endDate   - YYYY-MM-DD
+   * @returns {Promise<Record<string, any>[]>}
    */
-  async findHolidaysBetween(companyId, startDate, endDate, conn = null) {
-    const sql = `
-      SELECT id, company_id, holiday_date, name
-      FROM holidays
-      WHERE company_id = ? AND holiday_date BETWEEN ? AND ?
-      ORDER BY holiday_date ASC
-    `;
-    const [rows] = await this.db.query(sql, [companyId, startDate, endDate], "HolidayRepository.findHolidaysBetween", conn || this.activeConn);
-    return rows.map((r) => this.toCamelCase(r));
+  async findHolidaysBetween(companyId, startDate, endDate) {
+    const result = await this._query(
+      `SELECT id, company_id, holiday_date, name
+         FROM holidays
+        WHERE company_id = $1
+          AND holiday_date BETWEEN $2 AND $3
+        ORDER BY holiday_date ASC`,
+      [companyId, startDate, endDate]
+    );
+    return result.rows.map((r) => this.toCamelCase(r));
   }
 }

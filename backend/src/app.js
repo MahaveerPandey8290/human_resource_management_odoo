@@ -68,32 +68,32 @@ export function createApp(container) {
   // Health check endpoint (both /health and /api/health)
   const healthHandler = async (_req, res) => {
     try {
-      const [rows] = await container.db.query("SELECT 1 AS ping", [], "HEALTH_CHECK");
-      const isDbOk = rows[0]?.ping === 1;
-      const metrics = container.db.getPoolMetrics();
+      const result = await container.db.query('SELECT 1 AS ping');
+      const isDbOk = result.rows[0]?.ping === 1;
+      const poolStats = container.db.stats();
 
       res.status(200).json({
         success: true,
         data: {
-          status: isDbOk ? "UP" : "DOWN",
+          status: isDbOk ? 'UP' : 'DOWN',
           uptimeSeconds: Math.floor(process.uptime()),
-          version: "1.0.0",
+          version: '1.0.0',
           database: {
-            status: isDbOk ? "CONNECTED" : "DISCONNECTED",
-            pool: metrics
-          }
+            status: isDbOk ? 'CONNECTED' : 'DISCONNECTED',
+            pool: poolStats,
+          },
         },
-        requestId: res.req.id
+        requestId: res.req.id,
       });
     } catch (err) {
       res.status(503).json({
         success: false,
         error: {
-          code: "SERVICE_UNAVAILABLE",
-          message: "Database connection failed",
-          details: [err.message]
+          code: 'SERVICE_UNAVAILABLE',
+          message: 'Database connection failed',
+          details: [err.message],
         },
-        requestId: res.req.id
+        requestId: res.req.id,
       });
     }
   };
