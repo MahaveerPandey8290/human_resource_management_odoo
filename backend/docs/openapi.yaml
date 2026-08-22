@@ -1,0 +1,385 @@
+openapi: 3.0.3
+info:
+  title: Dayflow HRMS Backend API
+  description: Production-grade RESTful API for Dayflow Human Resource Management System.
+  version: 1.0.0
+servers:
+  - url: http://localhost:5000/api
+    description: Local development server
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    ApiResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        data:
+          type: object
+        meta:
+          type: object
+          properties:
+            page:
+              type: integer
+            limit:
+              type: integer
+            total:
+              type: integer
+        requestId:
+          type: string
+          format: uuid
+
+    ApiErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+        requestId:
+          type: string
+          format: uuid
+
+paths:
+  /health:
+    get:
+      summary: Health check & pool metrics
+      responses:
+        "200":
+          description: Service healthy
+
+  /auth/register-company:
+    post:
+      summary: Register company and bootstrap initial admin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [companyName, adminFirstName, adminLastName, adminEmail, adminPassword]
+              properties:
+                companyName: { type: string }
+                companyPhone: { type: string }
+                adminFirstName: { type: string }
+                adminLastName: { type: string }
+                adminEmail: { type: string, format: email }
+                adminPassword: { type: string }
+      responses:
+        "201":
+          description: Company registered successfully
+
+  /auth/login:
+    post:
+      summary: Authenticate user via Login ID or Email
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [identifier, password]
+              properties:
+                identifier: { type: string }
+                password: { type: string }
+      responses:
+        "200":
+          description: Authentication successful
+
+  /auth/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get logged-in user profile & permissions
+      responses:
+        "200":
+          description: User profile
+
+  /auth/change-password:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Change password & clear must_change_password flag
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [currentPassword, newPassword]
+              properties:
+                currentPassword: { type: string }
+                newPassword: { type: string }
+      responses:
+        "200":
+          description: Password updated
+
+  /auth/logout:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: User logout
+      responses:
+        "200":
+          description: Logout confirmation
+
+  /employees:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List employees with resolved todayStatus
+      parameters:
+        - in: query
+          name: page
+          schema: { type: integer, default: 1 }
+        - in: query
+          name: limit
+          schema: { type: integer, default: 20 }
+        - in: query
+          name: search
+          schema: { type: string }
+        - in: query
+          name: departmentId
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Employee card roster
+
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Create employee (Admin/HR only)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [firstName, lastName, workEmail, dateOfJoining]
+              properties:
+                firstName: { type: string }
+                lastName: { type: string }
+                workEmail: { type: string }
+                dateOfJoining: { type: string, format: date }
+                role: { type: string, enum: [admin, hr, employee] }
+      responses:
+        "201":
+          description: Employee created with single-view tempPassword
+
+  /employees/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get own full profile
+      responses:
+        "200":
+          description: Self profile
+
+  /employees/{id}:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: View employee profile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Employee details
+    patch:
+      security: [{ bearerAuth: [] }]
+      summary: Update employee profile
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Updated employee
+
+  /employees/{id}/avatar:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Upload employee avatar (<=2MB JPEG/PNG/WebP)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Avatar uploaded
+
+  /employees/{id}/skills:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Add skill/certification
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "201":
+          description: Skill added
+
+  /attendance/status:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Systray widget status
+      responses:
+        "200":
+          description: Current attendance status
+
+  /attendance/check-in:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Record check-in
+      responses:
+        "200":
+          description: Check-in recorded
+
+  /attendance/check-out:
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Record check-out & compute hours
+      responses:
+        "200":
+          description: Check-out recorded
+
+  /attendance/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get monthly attendance log & summary
+      parameters:
+        - in: query
+          name: month
+          schema: { type: string, example: "2026-08" }
+      responses:
+        "200":
+          description: Attendance log & payable days summary
+
+  /attendance:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Admin/HR daily attendance roster
+      parameters:
+        - in: query
+          name: date
+          schema: { type: string, format: date }
+      responses:
+        "200":
+          description: Daily roster
+
+  /leave-types:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List leave types
+      responses:
+        "200":
+          description: Leave types list
+
+  /leaves/allocations/me:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get own leave balance cards
+      responses:
+        "200":
+          description: Balance allocations
+
+  /leaves:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: List leave requests
+      parameters:
+        - in: query
+          name: scope
+          schema: { type: string, enum: [me, all] }
+        - in: query
+          name: status
+          schema: { type: string, enum: [pending, approved, rejected] }
+      responses:
+        "200":
+          description: Leave requests
+
+    post:
+      security: [{ bearerAuth: [] }]
+      summary: Submit leave request
+      responses:
+        "201":
+          description: Leave requested
+
+  /leaves/{id}/status:
+    patch:
+      security: [{ bearerAuth: [] }]
+      summary: Approve or reject leave request (Admin/HR only)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [approved, rejected] }
+                reviewComment: { type: string }
+      responses:
+        "200":
+          description: Review result
+
+  /employees/{id}/salary:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Get salary structure & components (Admin only)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Salary breakdown
+    put:
+      security: [{ bearerAuth: [] }]
+      summary: Update salary wage and recompute components (Admin only)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+      responses:
+        "200":
+          description: Updated salary structure
+
+  /employees/{id}/payslip:
+    get:
+      security: [{ bearerAuth: [] }]
+      summary: Generate prorated monthly payslip (Admin or Self)
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema: { type: integer }
+        - in: query
+          name: month
+          schema: { type: string, example: "2026-08" }
+      responses:
+        "200":
+          description: Payslip details
