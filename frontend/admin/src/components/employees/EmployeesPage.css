@@ -1,0 +1,33 @@
+.employees-page {
+  padding: var(--spacing-xl);
+  max-width: 1400px;
+  margin: 0 auto;
+}
+
+.employees-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: var(--spacing-xl);
+}
+
+.new-btn {
+  background-color: var(--accent-orange);
+  color: var(--bg-card);
+  padding: 10px 24px;
+  border-radius: var(--border-radius-sm);
+  font-weight: 600;
+  transition: background-color 0.2s;
+}
+
+.new-btn:hover {
+  background-color: var(--accent-orange-hover);
+}
+
+@media (max-width: 768px) {
+  .employees-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--spacing-md);
+  }
+}

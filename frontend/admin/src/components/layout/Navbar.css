@@ -38,10 +38,84 @@
   border-bottom: 2px solid var(--accent-orange);
 }
 
+.navbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-xl);
+}
+
+/* Attendance Tray */
+.attendance-tray {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  background-color: var(--bg-main);
+  padding: 6px 12px;
+  border-radius: 20px;
+}
+
+.status-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.status-dot.green {
+  background-color: #2D7A5D; /* Soft green */
+}
+
+.status-dot.red {
+  background-color: #C24A4A; /* Soft red */
+}
+
+.status-text {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--primary-navy);
+}
+
+.checkin-time {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.checkin-btn {
+  background-color: var(--accent-orange);
+  color: var(--bg-card);
+  padding: 6px 16px;
+  border-radius: 16px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  transition: background-color 0.2s;
+}
+
+.checkin-btn:hover {
+  background-color: var(--accent-orange-hover);
+}
+
+.checkin-btn.checkout {
+  background-color: var(--secondary-navy);
+}
+
+.checkin-btn.checkout:hover {
+  background-color: var(--primary-navy);
+}
+
+
+/* Profile Dropdown */
 .navbar-profile {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
+  cursor: pointer;
+  position: relative;
 }
 
 .profile-circle {
@@ -62,8 +136,42 @@
   color: var(--primary-navy);
 }
 
-@media (max-width: 768px) {
+.profile-dropdown {
+  position: absolute;
+  top: 50px;
+  right: 0;
+  background-color: var(--bg-card);
+  box-shadow: var(--shadow-md);
+  border-radius: var(--border-radius-sm);
+  overflow: hidden;
+  min-width: 150px;
+  z-index: 101;
+}
+
+.profile-dropdown ul {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+}
+
+.profile-dropdown li {
+  padding: var(--spacing-md);
+  font-size: 0.9rem;
+  color: var(--primary-navy);
+  font-weight: 500;
+  transition: background-color 0.2s;
+}
+
+.profile-dropdown li:hover {
+  background-color: var(--bg-main);
+}
+
+@media (max-width: 900px) {
   .navbar-links {
+    display: none;
+  }
+  
+  .attendance-tray {
     display: none;
   }
 }
