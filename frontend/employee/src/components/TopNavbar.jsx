@@ -1,60 +1,72 @@
 import React from "react";
-
-import {
-  Search,
-  Bell,
-  ChevronDown,
-} from "lucide-react";
+import { useLocation } from "react-router-dom";
 
 const TopNavbar = () => {
+
+  const location = useLocation();
+
+  const getTitle = () => {
+
+    if (location.pathname.includes("/profile")) {
+      return "My Profile";
+    }
+
+    if (location.pathname.includes("/attendance")) {
+      return "My Attendance";
+    }
+
+    if (location.pathname.includes("/time-off")) {
+      return "My Time Off";
+    }
+
+    if (location.pathname.includes("/apply-leave")) {
+      return "Apply for Leave";
+    }
+
+    return "Dashboard";
+  };
+
   return (
     <header className="top-navbar">
 
-      {/* Left Side - Empty */}
-      <div className="navbar-left"></div>
+      <div className="navbar-page-info">
 
+        <h1>
+          {getTitle()}
+        </h1>
 
-      {/* Right Side */}
+        <p>
+          Manage your employee account
+        </p>
+
+      </div>
+
 
       <div className="navbar-right">
 
-        {/* Search */}
-
-        <div className="navbar-search">
-
-          <Search size={18} />
-
-          <input
-            type="text"
-            placeholder="Search..."
-          />
-
-        </div>
-
-
         {/* Notification */}
 
-        <button className="notification-button">
+        <button className="notification-btn">
 
-          <Bell size={20} />
+          🔔
 
           <span className="notification-dot"></span>
 
         </button>
 
 
-        {/* Profile */}
+        {/* User */}
 
-        <div className="navbar-profile">
+        <div className="navbar-user">
 
           <div className="navbar-avatar">
-            TR
+            T
           </div>
 
           <div className="navbar-user-info">
 
             <strong>
-              Tanu Rajpurohit
+              Tanu
             </strong>
 
             <span>
@@ -62,8 +74,6 @@ const TopNavbar = () => {
             </span>
 
           </div>
-
-          <ChevronDown size={17} />
 
         </div>
 

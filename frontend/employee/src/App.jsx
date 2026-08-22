@@ -1,5 +1,4 @@
 import React from "react";
-
 import {
   BrowserRouter,
   Routes,
@@ -7,14 +6,50 @@ import {
   Navigate,
 } from "react-router-dom";
 
-import EmployeeLayout from "./components/EmployeeLayout";
+import Sidebar from "./components/Sidebar";
+import TopNavbar from "./components/TopNavbar";
 
-import Dashboard from "./pages/Dashboard";
-import Employees from "./pages/Employees";
-import Attendance from "./pages/Attendance";
-import Leave from "./pages/Leave";
-import Payroll from "./pages/Payroll";
+import EmployeeDashboard from "./pages/EmployeeDashboard";
+import MyProfile from "./pages/MyProfile";
+import MyAttendance from "./pages/MyAttendance";
+import MyTimeOff from "./pages/MyTimeOff";
+import ApplyLeave from "./pages/ApplyLeave";
 
+import "./index.css";
+
+
+/* =========================================================
+   EMPLOYEE LAYOUT
+========================================================= */
+
+const EmployeeLayout = ({ children }) => {
+  return (
+    <div className="employee-layout">
+
+      {/* LEFT SIDEBAR */}
+      <Sidebar />
+
+      {/* MAIN AREA */}
+      <div className="employee-main">
+
+        {/* TOP NAVBAR */}
+        <TopNavbar />
+
+        {/* PAGE CONTENT */}
+        <main className="employee-content">
+          {children}
+        </main>
+
+      </div>
+
+    </div>
+  );
+};
+
+
+/* =========================================================
+   APP
+========================================================= */
 
 function App() {
   return (
@@ -22,69 +57,9 @@ function App() {
 
       <Routes>
 
-        {/* Employee Section */}
-
-        <Route
-          path="/employee"
-          element={<EmployeeLayout />}
-        >
-
-          {/* Default Employee Route */}
-
-          <Route
-            index
-            element={
-              <Navigate
-                to="dashboard"
-                replace
-              />
-            }
-          />
-
-
-          {/* Dashboard */}
-
-          <Route
-            path="dashboard"
-            element={<Dashboard />}
-          />
-
-
-          {/* Employees */}
-
-          <Route
-            path="employees"
-            element={<Employees />}
-          />
-
-
-          {/* Attendance */}
-
-          <Route
-            path="attendance"
-            element={<Attendance />}
-          />
-
-
-          {/* Leave */}
-
-          <Route
-            path="leave"
-            element={<Leave />}
-          />
-
-
-          {/* Payroll */}
-
-          <Route
-            path="payroll"
-            element={<Payroll />}
-          />
-
-        </Route>
-
-
-        {/* Root */}
+        {/* ================================================
+            DEFAULT ROUTE
+        ================================================= */}
 
         <Route
           path="/"
@@ -97,7 +72,79 @@ function App() {
         />
 
 
-        {/* Unknown Routes */}
+        {/* ================================================
+            EMPLOYEE DASHBOARD
+        ================================================= */}
+
+        <Route
+          path="/employee/dashboard"
+          element={
+            <EmployeeLayout>
+              <EmployeeDashboard />
+            </EmployeeLayout>
+          }
+        />
+
+
+        {/* ================================================
+            MY PROFILE
+        ================================================= */}
+
+        <Route
+          path="/employee/profile"
+          element={
+            <EmployeeLayout>
+              <MyProfile />
+            </EmployeeLayout>
+          }
+        />
+
+
+        {/* ================================================
+            MY ATTENDANCE
+        ================================================= */}
+
+        <Route
+          path="/employee/attendance"
+          element={
+            <EmployeeLayout>
+              <MyAttendance />
+            </EmployeeLayout>
+          }
+        />
+
+
+        {/* ================================================
+            MY TIME OFF
+        ================================================= */}
+
+        <Route
+          path="/employee/time-off"
+          element={
+            <EmployeeLayout>
+              <MyTimeOff />
+            </EmployeeLayout>
+          }
+        />
+
+
+        {/* ================================================
+            APPLY FOR LEAVE
+        ================================================= */}
+
+        <Route
+          path="/employee/apply-leave"
+          element={
+            <EmployeeLayout>
+              <ApplyLeave />
+            </EmployeeLayout>
+          }
+        />
+
+
+        {/* ================================================
+            INVALID URL
+        ================================================= */}
 
         <Route
           path="*"

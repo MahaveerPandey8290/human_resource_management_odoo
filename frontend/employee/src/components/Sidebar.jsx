@@ -1,123 +1,105 @@
 import React from "react";
 import { NavLink } from "react-router-dom";
 
-import {
-  LayoutDashboard,
-  Users,
-  CalendarCheck,
-  CalendarDays,
-  Wallet,
-  X,
-} from "lucide-react";
-
 const Sidebar = () => {
+
   const menuItems = [
     {
       name: "Dashboard",
       path: "/employee/dashboard",
-      icon: LayoutDashboard,
+      icon: "⌂",
     },
     {
-      name: "Employees",
-      path: "/employee/employees",
-      icon: Users,
+      name: "My Profile",
+      path: "/employee/profile",
+      icon: "◉",
     },
     {
-      name: "Attendance",
+      name: "My Attendance",
       path: "/employee/attendance",
-      icon: CalendarCheck,
+      icon: "▣",
     },
     {
-      name: "Leave",
-      path: "/employee/leave",
-      icon: CalendarDays,
+      name: "My Time Off",
+      path: "/employee/time-off",
+      icon: "▤",
     },
     {
-      name: "Payroll",
-      path: "/employee/payroll",
-      icon: Wallet,
+      name: "Apply for Leave",
+      path: "/employee/apply-leave",
+      icon: "＋",
     },
   ];
 
   return (
     <aside className="sidebar">
 
+      {/* LOGO */}
+
       <div className="sidebar-logo">
+
         <div className="logo-box">
-          D
+          E
         </div>
 
-        <div>
-          <h2>DayFlow</h2>
-          <span>Employee</span>
+        <div className="logo-text">
+          <h2>Employee</h2>
+          <span>Portal</span>
         </div>
+
       </div>
 
 
-      <div className="sidebar-section">
+      {/* NAVIGATION */}
 
-        <p className="sidebar-title">
-          MAIN MENU
+      <nav className="sidebar-nav">
+
+        <p className="nav-title">
+          MENU
         </p>
 
-        <nav className="sidebar-menu">
+        {menuItems.map((item) => (
 
-          {menuItems.map((item) => {
+          <NavLink
+            key={item.path}
+            to={item.path}
+            className={({ isActive }) =>
+              `nav-item ${isActive ? "active" : ""}`
+            }
+          >
 
-            const Icon = item.icon;
+            <span className="nav-icon">
+              {item.icon}
+            </span>
 
-            return (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                className={({ isActive }) =>
-                  `sidebar-link ${
-                    isActive ? "active" : ""
-                  }`
-                }
-              >
-                <Icon
-                  size={20}
-                  strokeWidth={2}
-                />
+            <span className="nav-text">
+              {item.name}
+            </span>
 
-                <span>
-                  {item.name}
-                </span>
-              </NavLink>
-            );
+          </NavLink>
 
-          })}
+        ))}
 
-        </nav>
-
-      </div>
+      </nav>
 
 
-      <div className="sidebar-bottom">
+      {/* USER */}
+
+      <div className="sidebar-profile">
+
+        <div className="sidebar-avatar">
+          T
+        </div>
 
         <div className="sidebar-user">
 
-          <div className="user-avatar">
-            TR
-          </div>
+          <strong>
+            Tanu
+          </strong>
 
-          <div className="user-info">
-
-            <strong>
-              Tanu Rajpurohit
-            </strong>
-
-            <span>
-              Employee
-            </span>
-
-          </div>
-
-          <X
-            size={18}
-            className="user-close"
-          />
+          <span>
+            Employee
+          </span>
 
         </div>
 
