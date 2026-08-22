@@ -19,6 +19,7 @@ export function createAuthRouter(authController, authRateLimiter, authenticate, 
   const router = Router();
 
   router.post("/register-company", validate(registerCompanySchema), authController.registerCompany);
+  router.post("/register", validate(registerCompanySchema), authController.registerCompany);
   router.post("/login", authRateLimiter, validate(loginSchema), authController.login);
 
   router.use(authenticate);

@@ -65,17 +65,31 @@ export class EmployeeService extends BaseService {
       const serial = await this.employeeRepo.getNextSerialAtomic(companyId, joinYear, conn);
       const loginId = LoginIdGenerator.format(companyCode, data.firstName, data.lastName, joinYear, serial);
 
-      const employeeId = await this.employeeRepo.insert({
-        ...data,
+      // Only pass fields that map to actual DB columns in the employees table.
+      // Unknown keys (e.g. "department" alongside "departmentId") would cause
+      // a "column does not exist" error because BaseRepository.insert sends all keys.
+      const employeePayload = {
+        firstName: data.firstName,
+        lastName: data.lastName,
+        workEmail: data.email || data.workEmail,
+        phone: data.phone,
+        jobPosition: data.jobPosition,
+        departmentId: data.departmentId ? Number(data.departmentId) : null,
+        managerId: data.managerId ? Number(data.managerId) : null,
+        workLocation: data.workLocation || null,
+        dateOfJoining: data.dateOfJoining,
+        role: data.role || 'employee',
         companyId,
         loginId,
         passwordHash,
-        mustChangePassword: 1,
-        status: "active"
-      }, conn);
+        mustChangePassword: true,
+        status: 'active',
+      };
+
+      const employeeId = await this.employeeRepo.insert(employeePayload, conn);
 
       // Auto-allocate default leave days for the employee
-      const leaveTypes = await this.leaveRepo.findAllTypes(companyId, conn);
+      const leaveTypes = await this.leaveRepo.findAllTypes(companyId);
       for (const lt of leaveTypes) {
         await this.leaveRepo.upsertAllocation({
           employeeId,
@@ -87,7 +101,7 @@ export class EmployeeService extends BaseService {
       }
 
       const employee = await this.employeeRepo.findById(employeeId, companyId, conn);
-      return { employee, tempPassword };
+      return { employee, tempPassword, loginId };
     });
 
     return created;

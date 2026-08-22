@@ -67,7 +67,7 @@ export class AuthService extends BaseService {
         loginId,
         workEmail: data.adminEmail,
         passwordHash,
-        mustChangePassword: 0,
+        mustChangePassword: false,
         role: UserRole.ADMIN,
         firstName: data.adminFirstName,
         lastName: data.adminLastName,

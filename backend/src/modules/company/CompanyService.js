@@ -29,9 +29,17 @@ export class CompanyService extends BaseService {
   async getDepartments(companyId) {
     const cacheKey = `departments_${companyId}`;
     const cached = this.cache.get(cacheKey);
-    if (cached) {return cached;}
+    if (cached && cached.length > 0) {return cached;}
 
-    const departments = await this.deptRepo.findByCompanyId(companyId);
+    let departments = await this.deptRepo.findByCompanyId(companyId);
+    if (!departments || departments.length === 0) {
+      const defaultDepts = ["Engineering", "Human Resources", "Sales", "Finance", "Design", "Marketing"];
+      for (const name of defaultDepts) {
+        await this.deptRepo.insert({ companyId, name });
+      }
+      departments = await this.deptRepo.findByCompanyId(companyId);
+    }
+
     this.cache.set(cacheKey, departments, 60000);
     return departments;
   }

@@ -122,13 +122,14 @@ export class LeaveRepository extends BaseRepository {
    * @param {{ employeeId: number, leaveTypeId: number, year: number, allocatedDays: number, usedDays?: number }} data
    * @returns {Promise<void>}
    */
-  async upsertAllocation(data) {
+  async upsertAllocation(data, client = null) {
     await this._query(
       `INSERT INTO leave_allocations (employee_id, leave_type_id, year, allocated_days, used_days)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (employee_id, leave_type_id, year)
        DO UPDATE SET allocated_days = EXCLUDED.allocated_days`,
-      [data.employeeId, data.leaveTypeId, data.year, data.allocatedDays, data.usedDays ?? 0]
+      [data.employeeId, data.leaveTypeId, data.year, data.allocatedDays, data.usedDays ?? 0],
+      client
     );
   }
 

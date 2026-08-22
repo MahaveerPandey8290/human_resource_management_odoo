@@ -97,14 +97,18 @@ export class BaseRepository {
   }
 
   /**
-   * Internal query dispatcher — uses the transaction client if one is bound,
+   * Internal query dispatcher — uses explicit client if provided, or transaction client if bound,
    * otherwise falls back to the shared pool.
    *
    * @param {string}    sql
    * @param {unknown[]} params
+   * @param {import('pg').PoolClient|null} [client]
    * @returns {Promise<import('pg').QueryResult>}
    */
-  async _query(sql, params = []) {
+  async _query(sql, params = [], client = null) {
+    if (client) {
+      return client.query(sql, params);
+    }
     if (this._txClient) {
       return this._txClient.query(sql, params);
     }
@@ -118,9 +122,10 @@ export class BaseRepository {
    *
    * @param {number}      id
    * @param {number|null} [companyId]
+   * @param {import('pg').PoolClient|null} [client]
    * @returns {Promise<Record<string, any>|null>}
    */
-  async findById(id, companyId = null) {
+  async findById(id, companyId = null, client = null) {
     const cols = this.selectableColumns.map((c) => `t.${c}`).join(', ');
     const params = [id];
     let sql = `SELECT ${cols} FROM ${this.table} t WHERE t.id = $1`;
@@ -130,7 +135,7 @@ export class BaseRepository {
       sql += ` AND t.company_id = $2`;
     }
 
-    const result = await this._query(sql, params);
+    const result = await this._query(sql, params, client);
     return result.rows.length ? this.toCamelCase(result.rows[0]) : null;
   }
 
@@ -144,9 +149,10 @@ export class BaseRepository {
    * @param {string}              [options.sort='id']
    * @param {'ASC'|'DESC'}        [options.sortOrder='DESC']
    * @param {number|null}         [options.companyId=null]
+   * @param {import('pg').PoolClient|null} [client]
    * @returns {Promise<{ items: Record<string,any>[], total: number }>}
    */
-  async findAll({ filters = {}, page = 1, limit = 20, sort = 'id', sortOrder = 'DESC', companyId = null } = {}) {
+  async findAll({ filters = {}, page = 1, limit = 20, sort = 'id', sortOrder = 'DESC', companyId = null } = {}, client = null) {
     // Whitelist the sort column to prevent SQL injection via query params.
     const safeSortCol = this.allowedSortColumns.includes(sort) ? sort : 'id';
     const safeOrder   = sortOrder.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
@@ -163,8 +169,8 @@ export class BaseRepository {
     const countSql = `SELECT COUNT(*) AS total FROM ${this.table} t ${whereClause}`;
 
     const [dataResult, countResult] = await Promise.all([
-      this._query(dataSql,  [...params, limit, offset]),
-      this._query(countSql, params),
+      this._query(dataSql,  [...params, limit, offset], client),
+      this._query(countSql, params, client),
     ]);
 
     return {
@@ -177,16 +183,17 @@ export class BaseRepository {
    * Insert a single record and return the new row's primary key.
    *
    * @param {Record<string, any>} data - camelCase keys; they will be snake_cased
+   * @param {import('pg').PoolClient|null} [client]
    * @returns {Promise<number>}
    */
-  async insert(data) {
+  async insert(data, client = null) {
     const snake  = this.toSnakeCase(data);
     const keys   = Object.keys(snake);
     const values = Object.values(snake);
     const placeholders = this._buildPlaceholders(values);
 
     const sql = `INSERT INTO ${this.table} (${keys.join(', ')}) VALUES (${placeholders}) RETURNING id`;
-    const result = await this._query(sql, values);
+    const result = await this._query(sql, values, client);
     return result.rows[0].id;
   }
 
@@ -196,9 +203,10 @@ export class BaseRepository {
    * @param {number}              id
    * @param {Record<string, any>} data       - Fields to update (camelCase)
    * @param {number|null}         [companyId] - Optional extra safety scope
+   * @param {import('pg').PoolClient|null} [client]
    * @returns {Promise<boolean>}  true if a row was actually updated
    */
-  async updateById(id, data, companyId = null) {
+  async updateById(id, data, companyId = null, client = null) {
     const snake   = this.toSnakeCase(data);
     const entries = Object.entries(snake);
     if (entries.length === 0) return false;
@@ -214,7 +222,7 @@ export class BaseRepository {
       sql += ` AND company_id = $${params.length}`;
     }
 
-    const result = await this._query(sql, params);
+    const result = await this._query(sql, params, client);
     return (result.rowCount ?? 0) > 0;
   }
 
@@ -223,9 +231,10 @@ export class BaseRepository {
    *
    * @param {number}      id
    * @param {number|null} [companyId]
+   * @param {import('pg').PoolClient|null} [client]
    * @returns {Promise<boolean>}
    */
-  async deleteById(id, companyId = null) {
+  async deleteById(id, companyId = null, client = null) {
     const params = [id];
     let sql = `DELETE FROM ${this.table} WHERE id = $1`;
 
@@ -234,7 +243,7 @@ export class BaseRepository {
       sql += ` AND company_id = $2`;
     }
 
-    const result = await this._query(sql, params);
+    const result = await this._query(sql, params, client);
     return (result.rowCount ?? 0) > 0;
   }
 

@@ -151,10 +151,11 @@ export class EmployeeRepository extends BaseRepository {
    * @param {number} companyId
    * @returns {Promise<string>}
    */
-  async getCompanyCode(companyId) {
+  async getCompanyCode(companyId, client = null) {
     const result = await this._query(
       `SELECT code FROM companies WHERE id = $1 LIMIT 1`,
-      [companyId]
+      [companyId],
+      client
     );
     return result.rows.length ? result.rows[0].code : 'CO';
   }

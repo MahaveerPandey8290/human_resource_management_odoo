@@ -14,10 +14,10 @@ export class BaseService {
   /**
    * Runs business logic inside a managed transaction.
    * @template T
-   * @param {(conn: import("mysql2/promise").PoolConnection) => Promise<T>} callback
+   * @param {(client: import("pg").PoolClient) => Promise<T>} callback
    * @returns {Promise<T>}
    */
   async withTransaction(callback) {
-    return this.db.transaction(callback);
+    return this.db.withTransaction(callback);
   }
 }
