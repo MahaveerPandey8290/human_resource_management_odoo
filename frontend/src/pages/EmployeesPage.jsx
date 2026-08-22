@@ -133,7 +133,7 @@ export default function EmployeesPage() {
                       <StatusDot status={emp.todayStatus} />
                     </div>
                     <p className="text-body text-ink-secondary truncate">{emp.jobPosition}</p>
-                    <p className="text-small text-ink-muted truncate mt-0.5">{emp.department}</p>
+                    <p className="text-small text-ink-muted truncate mt-0.5">{emp.departmentName || emp.department || 'General'}</p>
                   </div>
                 </div>
                 <div className="flex items-center gap-2 mt-4 pt-4 border-t border-border">
@@ -150,9 +150,9 @@ export default function EmployeesPage() {
 
       {/* Legend */}
       {!loading && employees.length > 0 && (
-        <div className="flex items-center gap-4 text-small text-ink-muted">
+        <div className="flex items-center gap-5 text-small text-ink-muted pt-2">
           <span className="flex items-center gap-1.5"><StatusDot status="present" /> Present</span>
-          <span className="flex items-center gap-1.5"><StatusDot status="leave" /> On Leave</span>
+          <span className="flex items-center gap-1.5"><StatusDot status="on_leave" /> On Leave</span>
           <span className="flex items-center gap-1.5"><StatusDot status="absent" /> Absent</span>
         </div>
       )}

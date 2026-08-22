@@ -19,8 +19,8 @@ import { computeSalaryComponents, computePF } from '@/services/salary.service';
 export default function ProfilePage() {
   const { id } = useParams();
   const { user } = useAuth();
-  const isMe = id === 'me' || id === user?.employeeId;
-  const targetId = isMe ? user?.employeeId : id;
+  const isMe = id === 'me' || String(id) === String(user?.id) || String(id) === String(user?.employeeId);
+  const targetId = isMe ? (user?.id || user?.employeeId) : id;
 
   const [employee, setEmployee] = useState(null);
   const [salary, setSalary] = useState(null);
