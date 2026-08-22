@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Building2, User, Mail, Phone, Lock, UploadCloud, Check } from 'lucide-react';
+import { Building2, User, Mail, Phone, Lock, UploadCloud, Check, Copy, ArrowRight, ShieldCheck, Info } from 'lucide-react';
 import BackgroundBlobs from '@/components/BackgroundBlobs';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
@@ -30,6 +30,8 @@ export default function SignUpPage() {
   const [errors, setErrors] = useState({});
   const [logo, setLogo] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [registeredData, setRegisteredData] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
@@ -54,14 +56,24 @@ export default function SignUpPage() {
     const res = await signUp(form);
     setLoading(false);
     if (res.success) {
-      toast('Company account created. Welcome!', 'success');
-      navigate('/employees');
+      toast('Company account created successfully!', 'success');
+      setRegisteredData(res.data);
     } else {
       toast(res.error?.message || 'Sign up failed.', 'error');
     }
   };
 
+  const copyLoginId = () => {
+    const loginId = registeredData?.user?.loginId || registeredData?.loginId;
+    if (loginId) {
+      navigator.clipboard?.writeText(loginId);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }
+  };
+
   const strength = strengthScore(form.password);
+  const loginId = registeredData?.user?.loginId || registeredData?.loginId;
 
   return (
     <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12">
@@ -76,71 +88,150 @@ export default function SignUpPage() {
 
       <div className="w-full max-w-md">
         <div className="bg-surface border border-border rounded-card shadow-lg p-8">
-          <h1 className="text-h2 font-semibold text-ink-primary text-center">Create your company</h1>
-          <p className="text-body text-ink-secondary text-center mt-2 mb-6">
-            Register your company and become its first admin. Employees are added from inside the app.
-          </p>
-
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            {/* Logo dropzone */}
-            <div className="flex flex-col gap-1.5">
-              <label className="text-label font-medium uppercase tracking-wide text-ink-secondary">Company logo</label>
-              <label className="flex items-center gap-3 p-3 border-2 border-dashed border-border-strong rounded-input cursor-pointer hover:border-primary/50 hover:bg-sunken/50 transition-colors">
-                <div className="w-10 h-10 rounded-lg bg-primary-tint flex items-center justify-center overflow-hidden">
-                  {logo ? <img src={logo} alt="" className="w-full h-full object-cover" /> : <UploadCloud className="w-5 h-5 text-primary" />}
+          {registeredData ? (
+            /* System Generated Login ID Screen */
+            <div className="flex flex-col gap-5">
+              <div className="flex gap-3 items-start bg-success-tint rounded-card px-4 py-3 border border-success/20">
+                <ShieldCheck className="w-6 h-6 text-success shrink-0 mt-0.5" />
+                <div>
+                  <h2 className="text-h3 font-semibold text-ink-primary">Company Registered!</h2>
+                  <p className="text-small text-ink-secondary mt-0.5">
+                    Your company account for <span className="font-medium text-ink-primary">{registeredData.company?.name || form.companyName}</span> is ready.
+                  </p>
                 </div>
-                <span className="text-small text-ink-secondary">{logo ? 'Logo selected' : 'Click to upload (optional)'}</span>
-                <input
-                  type="file"
-                  accept="image/*"
-                  className="hidden"
-                  onChange={(e) => {
-                    const f = e.target.files[0];
-                    if (f) setLogo(URL.createObjectURL(f));
-                  }}
-                />
-              </label>
-            </div>
+              </div>
 
-            <Input label="Company name" placeholder="Odoo India" icon={Building2} value={form.companyName} onChange={(e) => set('companyName', e.target.value)} error={errors.companyName} />
-            <Input label="Your name" placeholder="Adarsh Reddy" icon={User} value={form.name} onChange={(e) => set('name', e.target.value)} error={errors.name} />
-            <Input label="Email" type="email" placeholder="you@company.com" icon={Mail} value={form.email} onChange={(e) => set('email', e.target.value)} error={errors.email} />
-            <Input label="Phone" placeholder="+91 98450 00000" icon={Phone} value={form.phone} onChange={(e) => set('phone', e.target.value)} error={errors.phone} />
-
-            <div>
-              <Input label="Password" type="password" placeholder="Min 8 characters" icon={Lock} value={form.password} onChange={(e) => set('password', e.target.value)} error={errors.password} />
-              <AnimatePresence>
-                {form.password && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: 'auto' }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="mt-2"
+              {/* System Generated Login ID Box */}
+              <div className="bg-sunken border border-border-strong rounded-card p-5">
+                <p className="text-label uppercase tracking-wider text-ink-muted mb-2 font-semibold">
+                  Your System Generated Login ID
+                </p>
+                <div className="flex items-center justify-between gap-3 bg-white border border-border rounded-input px-3.5 py-3 shadow-xs">
+                  <code className="text-h3 font-bold text-primary tracking-wider tnum">
+                    {loginId}
+                  </code>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={copyLoginId}
+                    className="shrink-0 flex items-center gap-1.5"
                   >
-                    <div className="flex gap-1">
-                      {[0, 1, 2, 3].map((i) => (
-                        <div
-                          key={i}
-                          className="h-1 flex-1 rounded-full transition-colors"
-                          style={{ background: i < strength ? strengthColors[strength] : '#ECEEF3' }}
-                        />
-                      ))}
-                    </div>
-                    <p className="text-small text-ink-muted mt-1">{strengthLabels[strength]}</p>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                    {copied ? (
+                      <>
+                        <Check className="w-4 h-4 text-success" />
+                        <span className="text-success font-medium">Copied!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4 text-ink-muted" />
+                        <span>Copy</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                {/* Formula explanation breakdown */}
+                <div className="mt-3.5 pt-3.5 border-t border-border flex flex-col gap-1.5 text-xs text-ink-secondary">
+                  <p className="font-medium text-ink-primary">Login ID Formula Breakdown:</p>
+                  <div className="grid grid-cols-2 gap-2 text-ink-muted">
+                    <div>Company Code: <span className="font-semibold text-ink-primary">{registeredData.company?.code || 'OI'}</span></div>
+                    <div>Admin Name: <span className="font-semibold text-ink-primary">{form.name}</span></div>
+                    <div>Year of Joining: <span className="font-semibold text-ink-primary">{new Date().getFullYear()}</span></div>
+                    <div>Serial Number: <span className="font-semibold text-ink-primary">0001</span></div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Info Note */}
+              <div className="flex gap-2.5 items-start bg-info-tint border border-info/20 rounded-input px-3.5 py-3">
+                <Info className="w-4 h-4 text-info shrink-0 mt-0.5" />
+                <p className="text-small text-ink-secondary leading-relaxed">
+                  You can use either this <strong className="text-ink-primary">Login ID</strong> ({loginId}) or your <strong className="text-ink-primary">Email</strong> ({form.email}) to sign in anytime.
+                </p>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-col gap-2 mt-2">
+                <Button onClick={() => navigate('/employees')} className="w-full flex items-center justify-center gap-2">
+                  <span>Go to Dashboard</span>
+                  <ArrowRight className="w-4 h-4" />
+                </Button>
+                <Button variant="ghost" onClick={() => navigate('/signin')} className="w-full">
+                  Sign In Page
+                </Button>
+              </div>
             </div>
+          ) : (
+            /* Sign Up Form */
+            <>
+              <h1 className="text-h2 font-semibold text-ink-primary text-center">Create your company</h1>
+              <p className="text-body text-ink-secondary text-center mt-2 mb-6">
+                Register your company and receive your system-generated Login ID automatically.
+              </p>
 
-            <Input label="Confirm password" type="password" placeholder="Re-enter password" icon={Lock} value={form.confirmPassword} onChange={(e) => set('confirmPassword', e.target.value)} error={errors.confirmPassword} />
+              <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+                {/* Logo dropzone */}
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-label font-medium uppercase tracking-wide text-ink-secondary">Company logo</label>
+                  <label className="flex items-center gap-3 p-3 border-2 border-dashed border-border-strong rounded-input cursor-pointer hover:border-primary/50 hover:bg-sunken/50 transition-colors">
+                    <div className="w-10 h-10 rounded-lg bg-primary-tint flex items-center justify-center overflow-hidden">
+                      {logo ? <img src={logo} alt="" className="w-full h-full object-cover" /> : <UploadCloud className="w-5 h-5 text-primary" />}
+                    </div>
+                    <span className="text-small text-ink-secondary">{logo ? 'Logo selected' : 'Click to upload (optional)'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files[0];
+                        if (f) setLogo(URL.createObjectURL(f));
+                      }}
+                    />
+                  </label>
+                </div>
 
-            <Button type="submit" loading={loading} className="w-full mt-2">Create company account</Button>
-          </form>
+                <Input label="Company name" placeholder="Odoo India" icon={Building2} value={form.companyName} onChange={(e) => set('companyName', e.target.value)} error={errors.companyName} />
+                <Input label="Your name" placeholder="John Doe" icon={User} value={form.name} onChange={(e) => set('name', e.target.value)} error={errors.name} />
+                <Input label="Email" type="email" placeholder="john@company.com" icon={Mail} value={form.email} onChange={(e) => set('email', e.target.value)} error={errors.email} />
+                <Input label="Phone" placeholder="+91 98450 00000" icon={Phone} value={form.phone} onChange={(e) => set('phone', e.target.value)} error={errors.phone} />
 
-          <p className="text-center text-small text-ink-muted mt-5">
-            Already have an account?{' '}
-            <Link to="/signin" className="text-primary font-medium hover:underline">Sign In</Link>
-          </p>
+                <div>
+                  <Input label="Password" type="password" placeholder="Min 8 characters" icon={Lock} value={form.password} onChange={(e) => set('password', e.target.value)} error={errors.password} />
+                  <AnimatePresence>
+                    {form.password && (
+                      <motion.div
+                        initial={{ opacity: 0, height: 0 }}
+                        animate={{ opacity: 1, height: 'auto' }}
+                        exit={{ opacity: 0, height: 0 }}
+                        className="mt-2"
+                      >
+                        <div className="flex gap-1">
+                          {[0, 1, 2, 3].map((i) => (
+                            <div
+                              key={i}
+                              className="h-1 flex-1 rounded-full transition-colors"
+                              style={{ background: i < strength ? strengthColors[strength] : '#ECEEF3' }}
+                            />
+                          ))}
+                        </div>
+                        <p className="text-small text-ink-muted mt-1">{strengthLabels[strength]}</p>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+
+                <Input label="Confirm password" type="password" placeholder="Re-enter password" icon={Lock} value={form.confirmPassword} onChange={(e) => set('confirmPassword', e.target.value)} error={errors.confirmPassword} />
+
+                <Button type="submit" loading={loading} className="w-full mt-2">Sign Up</Button>
+              </form>
+
+              <p className="text-center text-small text-ink-muted mt-5">
+                Already have an account?{' '}
+                <Link to="/signin" className="text-primary font-medium hover:underline">Sign In</Link>
+              </p>
+            </>
+          )}
         </div>
       </div>
     </div>
