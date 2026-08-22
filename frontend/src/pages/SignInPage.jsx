@@ -12,7 +12,7 @@ import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Eye, EyeOff, Lock, Mail } from 'lucide-react';
-import BackgroundBlobs from '@/components/BackgroundBlobs';
+import AuthLayout from '@/components/AuthLayout';
 import Button from '@/components/ui/Button';
 import Input from '@/components/ui/Input';
 import { useAuth } from '@/context/AuthContext';
@@ -64,89 +64,78 @@ export default function SignInPage() {
   };
 
   return (
-    <div className="min-h-screen flex flex-col items-center justify-center px-4 py-12">
-      <BackgroundBlobs />
-
-      {/* Logo */}
-      <Link to="/" className="flex items-center gap-2.5 mb-8">
-        <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary to-accent flex items-center justify-center">
-          <span className="text-white font-bold text-sm">D</span>
-        </div>
-        <span className="font-semibold text-ink-primary text-h3">Dayflow</span>
-      </Link>
-
-      {/* Card — shakes horizontally on wrong credentials */}
+    <AuthLayout>
       <motion.div
         animate={shake ? { x: [0, -12, 12, -8, 8, 0] } : { x: 0 }}
         transition={{ duration: 0.4 }}
-        className="w-full max-w-sm"
+        className="w-full max-w-md mx-auto"
       >
-        <div className="bg-surface border border-border rounded-card shadow-lg p-8">
-          <h1 className="text-h2 font-semibold text-ink-primary text-center">Sign in</h1>
-          <p className="text-body text-ink-secondary text-center mt-1.5 mb-7">
-            Enter your Login ID or work email to continue.
-          </p>
-
-          <form onSubmit={handleSubmit} className="flex flex-col gap-4">
-            {/* Login ID or Email */}
-            <Input
-              label="Login ID / Email"
-              placeholder="OIJODO20220001 or john@company.com"
-              value={identifier}
-              onChange={(e) => setIdentifier(e.target.value)}
-              icon={Mail}
-              autoFocus
-              autoComplete="username"
-            />
-
-            {/* Password with show/hide toggle */}
-            <div className="relative">
-              <Input
-                label="Password"
-                type={showPassword ? 'text' : 'password'}
-                placeholder="Your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                icon={Lock}
-                autoComplete="current-password"
-              />
-              <button
-                type="button"
-                onClick={() => setShowPassword((v) => !v)}
-                className="absolute right-3 top-[34px] text-ink-muted hover:text-ink-primary transition-colors"
-                aria-label={showPassword ? 'Hide password' : 'Show password'}
-              >
-                {showPassword
-                  ? <EyeOff className="w-4 h-4" />
-                  : <Eye className="w-4 h-4" />
-                }
-              </button>
-            </div>
-
-            {/* Inline error */}
-            {error && (
-              <motion.p
-                initial={{ opacity: 0, y: -4 }}
-                animate={{ opacity: 1, y: 0 }}
-                className="text-small text-danger bg-danger-tint rounded-input px-3 py-2"
-              >
-                {error}
-              </motion.p>
-            )}
-
-            <Button type="submit" loading={loading} className="w-full mt-1">
-              Sign in
-            </Button>
-          </form>
-
-          <p className="text-center text-small text-ink-muted mt-5">
-            Don't have an account?{' '}
-            <Link to="/signup" className="text-primary font-medium hover:underline">
-              Sign Up
-            </Link>
+        <div className="mb-6">
+          <h1 className="text-h2 sm:text-h1 font-bold text-ink-primary tracking-tight">Sign in</h1>
+          <p className="text-body text-ink-secondary mt-1.5">
+            Enter your Login ID or work email to access your workspace.
           </p>
         </div>
+
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+          {/* Login ID or Email */}
+          <Input
+            label="Login ID / Email"
+            placeholder="OIJODO20220001 or john@company.com"
+            value={identifier}
+            onChange={(e) => setIdentifier(e.target.value)}
+            icon={Mail}
+            autoFocus
+            autoComplete="username"
+          />
+
+          {/* Password with show/hide toggle */}
+          <div className="relative">
+            <Input
+              label="Password"
+              type={showPassword ? 'text' : 'password'}
+              placeholder="Your password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              icon={Lock}
+              autoComplete="current-password"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword((v) => !v)}
+              className="absolute right-3 top-[34px] text-ink-muted hover:text-ink-primary transition-colors p-1 rounded-md"
+              aria-label={showPassword ? 'Hide password' : 'Show password'}
+            >
+              {showPassword
+                ? <EyeOff className="w-4 h-4" />
+                : <Eye className="w-4 h-4" />
+              }
+            </button>
+          </div>
+
+          {/* Inline error */}
+          {error && (
+            <motion.p
+              initial={{ opacity: 0, y: -4 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="text-small text-danger bg-danger-tint border border-danger/20 rounded-input px-3.5 py-2.5"
+            >
+              {error}
+            </motion.p>
+          )}
+
+          <Button type="submit" loading={loading} className="w-full mt-2 py-2.5 text-body font-semibold">
+            Sign in
+          </Button>
+        </form>
+
+        <p className="text-center text-small text-ink-secondary mt-6">
+          Don't have an account?{' '}
+          <Link to="/signup" className="text-primary font-semibold hover:underline">
+            Sign Up
+          </Link>
+        </p>
       </motion.div>
-    </div>
+    </AuthLayout>
   );
 }

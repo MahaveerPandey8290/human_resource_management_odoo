@@ -1,9 +1,16 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CalendarOff, Plus, Check, X, ThumbsUp, ThumbsDown } from 'lucide-react';
-import { format, eachDayOfInterval, isWeekend, isSameDay, parseISO } from 'date-fns';
+import {
+  CalendarOff, Plus, Check, X, ThumbsUp, ThumbsDown,
+  Upload, FileText, Calendar, Clock, AlertCircle, Info, ChevronLeft, ChevronRight
+} from 'lucide-react';
+import {
+  format, eachDayOfInterval, isWeekend, isSameDay, parseISO,
+  getWeek, startOfMonth, endOfMonth, getDay, addMonths, subMonths
+} from 'date-fns';
 import * as leaveService from '@/services/leave.service';
+import * as employeeService from '@/services/employee.service';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import PageHeader from '@/components/ui/PageHeader';
@@ -16,14 +23,10 @@ import Input from '@/components/ui/Input';
 import Select from '@/components/ui/Select';
 import Textarea from '@/components/ui/Textarea';
 import DatePicker from '@/components/ui/DatePicker';
-import FileDropzone from '@/components/ui/FileDropzone';
 import SearchInput from '@/components/ui/SearchInput';
-import ProgressRing from '@/components/ui/ProgressRing';
 import Table from '@/components/ui/Table';
 import Skeleton from '@/components/ui/Skeleton';
 import EmptyState from '@/components/ui/EmptyState';
-import ConfirmDialog from '@/components/ConfirmDialog';
-import * as employeeService from '@/services/employee.service';
 
 const statusBadge = {
   pending: <Badge tone="warning">Pending</Badge>,
@@ -36,607 +39,905 @@ export default function TimeOffPage() {
   const { search: globalSearch } = useOutletContext();
   const isAdminOrHr = user?.role === 'admin' || user?.role === 'hr';
 
-  if (isAdminOrHr) return <AdminTimeOff globalSearch={globalSearch} />;
-  return <EmployeeTimeOff employeeId={user?.employeeId} />;
+  if (isAdminOrHr) {
+    return <AdminTimeOff globalSearch={globalSearch} currentUser={user} />;
+  }
+  return <EmployeeTimeOff currentUser={user} />;
 }
 
-// ─── Employee View ───
+// ─── Employee View ───────────────────────────────────────────────────────────
 
-function EmployeeTimeOff({ employeeId }) {
+function EmployeeTimeOff({ currentUser }) {
   const { toast } = useToast();
-  const [balances, setBalances] = useState({});
+  const [balances, setBalances] = useState([]);
   const [requests, setRequests] = useState([]);
   const [leaveTypes, setLeaveTypes] = useState([]);
   const [holidays, setHolidays] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  const currentYear = new Date().getFullYear();
 
   const load = async () => {
     setLoading(true);
-    const [bal, reqs, lts, hols] = await Promise.all([
-      leaveService.getMyBalances(employeeId),
-      leaveService.listMyRequests(employeeId),
+    const [balRes, reqRes, ltRes, holRes] = await Promise.all([
+      leaveService.getMyBalances(currentYear),
+      leaveService.listMyRequests(),
       leaveService.listLeaveTypes(),
-      leaveService.listHolidays(),
+      leaveService.listHolidays(currentYear),
     ]);
-    if (bal.success) setBalances(bal.data);
-    if (reqs.success) setRequests(reqs.data);
-    if (lts.success) setLeaveTypes(lts.data);
-    if (hols.success) setHolidays(hols.data);
+
+    if (balRes.success && Array.isArray(balRes.data)) setBalances(balRes.data);
+    if (reqRes.success && Array.isArray(reqRes.data)) setRequests(reqRes.data);
+    if (ltRes.success && Array.isArray(ltRes.data)) setLeaveTypes(ltRes.data);
+    if (holRes.success && Array.isArray(holRes.data)) setHolidays(holRes.data);
     setLoading(false);
   };
 
-  useEffect(() => { if (employeeId) load(); }, [employeeId]);
+  useEffect(() => {
+    load();
+  }, []);
+
+  // Compute available days
+  const paidBal = balances.find((b) => b.leaveTypeName?.toLowerCase().includes('paid')) || {
+    allocatedDays: 24, usedDays: 0, remainingDays: 24
+  };
+  const sickBal = balances.find((b) => b.leaveTypeName?.toLowerCase().includes('sick')) || {
+    allocatedDays: 7, usedDays: 0, remainingDays: 7
+  };
+
+  const handleDateClick = (date) => {
+    setSelectedDate(format(date, 'yyyy-MM-dd'));
+    setShowModal(true);
+  };
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Time Off"
-        subtitle="Your leave balance and requests."
-        actions={<Button onClick={() => setShowModal(true)}><Plus className="w-4 h-4" /> New Request</Button>}
-      />
-
-      {/* Allocation cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {loading ? (
-          Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-32 rounded-card" />)
-        ) : (
-          leaveTypes.map((lt, i) => {
-            const bal = balances[lt.id] || { allocated: lt.allocation, used: 0, available: lt.allocation };
-            const progress = lt.allocation > 0 ? bal.used / lt.allocation : 0;
-            return (
-              <motion.div
-                key={lt.id}
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: i * 0.08 }}
-              >
-                <Card className="p-5 flex items-center gap-4">
-                  <ProgressRing progress={progress} size={56} color={lt.color}>
-                    <span className="text-small font-semibold text-ink-primary tnum">{bal.available}</span>
-                  </ProgressRing>
-                  <div className="flex-1">
-                    <p className="text-body font-semibold text-ink-primary">{lt.name}</p>
-                    <p className="text-small text-ink-muted mt-0.5">
-                      <span className="tnum">{bal.available}</span> of <span className="tnum">{lt.allocation}</span> days available
-                    </p>
-                    <p className="text-small text-ink-muted">
-                      <span className="tnum">{bal.used}</span> used
-                    </p>
-                  </div>
-                </Card>
-              </motion.div>
-            );
-          })
-        )}
+      {/* Header matching wireframe */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-h2 font-bold text-ink-primary">Time Off</h2>
+          <p className="text-small text-ink-muted">View your leave balances, calendar, and submit time off requests.</p>
+        </div>
+        <button
+          onClick={() => { setSelectedDate(null); setShowModal(true); }}
+          className="px-6 py-2.5 rounded-pill bg-[#e056fd] hover:bg-[#c83fe5] text-white font-bold text-sm uppercase tracking-wider transition-all shadow-md active:scale-95 flex items-center gap-2"
+        >
+          <Plus className="w-4 h-4" />
+          <span>NEW</span>
+        </button>
       </div>
 
-      {/* Year calendar */}
-      <YearCalendar requests={requests} holidays={holidays} loading={loading} />
+      {/* Available Balance Cards matching wireframe */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <Card className="p-6 border-2 border-primary/20 bg-primary-tint/10 flex flex-col items-center justify-center text-center">
+          <h3 className="text-h3 font-bold text-primary">Paid time Off</h3>
+          <p className="text-2xl font-extrabold text-ink-primary mt-2">
+            {Number(paidBal.remainingDays ?? paidBal.allocatedDays ?? 24).toFixed(0).padStart(2, '0')} Days Available
+          </p>
+          <p className="text-xs text-ink-muted mt-1">
+            {paidBal.usedDays || 0} days used of {paidBal.allocatedDays || 24} allocated
+          </p>
+        </Card>
 
-      {/* My requests */}
-      <Card className="overflow-hidden">
-        <div className="px-5 pt-5 pb-3">
-          <h3 className="text-body font-semibold text-ink-primary">My Requests</h3>
-        </div>
-        {loading ? (
-          <div className="flex flex-col">
-            {Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-14 mx-5 mb-2" />)}
-          </div>
-        ) : requests.length === 0 ? (
-          <EmptyState icon={CalendarOff} title="No requests yet" description="When you request time off, it will appear here." />
-        ) : (
-          <div className="flex flex-col px-5 pb-4 gap-2">
-            {requests.map((r) => (
-              <div key={r.id} className="flex items-center justify-between gap-3 py-3 border-b border-border last:border-0">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-lg bg-primary-tint flex items-center justify-center">
-                    <CalendarOff className="w-5 h-5 text-primary" />
-                  </div>
-                  <div>
-                    <p className="text-body font-medium text-ink-primary">{r.leaveType?.name}</p>
-                    <p className="text-small text-ink-muted tnum">{format(parseISO(r.startDate), 'dd MMM')} → {format(parseISO(r.endDate), 'dd MMM')} · {r.days} day{r.days !== 1 ? 's' : ''}</p>
-                  </div>
-                </div>
-                {statusBadge[r.status]}
-              </div>
-            ))}
-          </div>
-        )}
-      </Card>
+        <Card className="p-6 border-2 border-info/20 bg-info-tint/10 flex flex-col items-center justify-center text-center">
+          <h3 className="text-h3 font-bold text-info">Sick time off</h3>
+          <p className="text-2xl font-extrabold text-ink-primary mt-2">
+            {Number(sickBal.remainingDays ?? sickBal.allocatedDays ?? 7).toFixed(0).padStart(2, '0')} Days Available
+          </p>
+          <p className="text-xs text-ink-muted mt-1">
+            {sickBal.usedDays || 0} days used of {sickBal.allocatedDays || 7} allocated
+          </p>
+        </Card>
+      </div>
 
-      <NewTimeOffModal
+      {/* 12-Month Calendar matching Screenshot 2 */}
+      <YearCalendarView
+        year={currentYear}
+        requests={requests}
+        holidays={holidays}
+        loading={loading}
+        onDateClick={handleDateClick}
+      />
+
+      {/* Time off Request Modal */}
+      <TimeOffRequestModal
         open={showModal}
         onClose={() => setShowModal(false)}
-        employeeId={employeeId}
+        currentUser={currentUser}
         leaveTypes={leaveTypes}
         balances={balances}
-        existingRequests={requests}
+        initialDate={selectedDate}
         onSuccess={() => { load(); }}
       />
     </div>
   );
 }
 
-function YearCalendar({ requests, holidays, loading }) {
-  const year = new Date().getFullYear();
-  const months = Array.from({ length: 12 }, (_, i) => new Date(year, i, 1));
+// ─── Admin / HR View ──────────────────────────────────────────────────────────
 
-  if (loading) {
-    return (
-      <Card className="p-5">
-        <Skeleton className="h-6 w-32 mb-4" />
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-          {Array.from({ length: 12 }).map((_, i) => <Skeleton key={i} className="h-40 rounded-card" />)}
-        </div>
-      </Card>
-    );
-  }
-
-  const approvedRanges = requests.filter((r) => r.status === 'approved').flatMap((r) => ({
-    dates: eachDayOfInterval({ start: parseISO(r.startDate), end: parseISO(r.endDate) }).filter((d) => !isWeekend(d)),
-    status: 'approved',
-  }));
-  const pendingRanges = requests.filter((r) => r.status === 'pending').flatMap((r) => ({
-    dates: eachDayOfInterval({ start: parseISO(r.startDate), end: parseISO(r.endDate) }).filter((d) => !isWeekend(d)),
-    status: 'pending',
-  }));
-  const rejectedRanges = requests.filter((r) => r.status === 'rejected').flatMap((r) => ({
-    dates: eachDayOfInterval({ start: parseISO(r.startDate), end: parseISO(r.endDate) }).filter((d) => !isWeekend(d)),
-    status: 'rejected',
-  }));
-  const holidayDates = holidays.map((h) => parseISO(h.date));
-
-  const tintFor = (date) => {
-    for (const r of approvedRanges) if (r.dates.some((d) => isSameDay(d, date))) return 'approved';
-    for (const r of pendingRanges) if (r.dates.some((d) => isSameDay(d, date))) return 'pending';
-    for (const r of rejectedRanges) if (r.dates.some((d) => isSameDay(d, date))) return 'rejected';
-    if (holidayDates.some((d) => isSameDay(d, date))) return 'holiday';
-    return null;
-  };
-
-  const tints = {
-    approved: 'bg-primary text-white',
-    pending: 'bg-warning text-white',
-    rejected: 'bg-danger text-white',
-    holiday: 'bg-accent/30 text-accent',
-  };
-
-  return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-      <Card className="p-5 lg:col-span-2">
-        <h3 className="text-body font-semibold text-ink-primary mb-4">Year {year}</h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
-          {months.map((m) => (
-            <div key={m.getMonth()}>
-              <p className="text-small font-medium text-ink-secondary mb-2">{format(m, 'MMM')}</p>
-              <div className="grid grid-cols-7 gap-0.5">
-                {eachDayOfInterval({ start: m, end: new Date(year, m.getMonth() + 1, 0) }).map((d) => {
-                  const tint = tintFor(d);
-                  return (
-                    <div
-                      key={d.getDate()}
-                      className={`w-full aspect-square rounded text-[9px] flex items-center justify-center ${
-                        tint ? tints[tint] : isWeekend(d) ? 'text-ink-muted/40' : 'text-ink-secondary'
-                      }`}
-                    >
-                      {d.getDate()}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-        </div>
-        <div className="flex items-center gap-4 mt-4 pt-4 border-t border-border">
-          <span className="flex items-center gap-1.5 text-small text-ink-muted"><span className="w-2.5 h-2.5 rounded bg-primary" /> Approved</span>
-          <span className="flex items-center gap-1.5 text-small text-ink-muted"><span className="w-2.5 h-2.5 rounded bg-warning" /> To Approve</span>
-          <span className="flex items-center gap-1.5 text-small text-ink-muted"><span className="w-2.5 h-2.5 rounded bg-danger" /> Refused</span>
-          <span className="flex items-center gap-1.5 text-small text-ink-muted"><span className="w-2.5 h-2.5 rounded bg-accent/30" /> Holiday</span>
-        </div>
-      </Card>
-
-      <Card className="p-5">
-        <h3 className="text-body font-semibold text-ink-primary mb-4">Public Holidays</h3>
-        <div className="flex flex-col gap-2 max-h-[400px] overflow-y-auto">
-          {holidays.map((h) => (
-            <div key={h.id} className="flex items-center justify-between py-2 border-b border-border last:border-0">
-              <span className="text-body text-ink-primary">{h.name}</span>
-              <span className="text-small text-ink-muted tnum">{format(parseISO(h.date), 'dd MMM')}</span>
-            </div>
-          ))}
-        </div>
-      </Card>
-    </div>
-  );
-}
-
-// ─── Admin/HR View ───
-
-function AdminTimeOff({ globalSearch }) {
-  const { user } = useAuth();
+function AdminTimeOff({ globalSearch, currentUser }) {
   const { toast } = useToast();
-  const [tab, setTab] = useState('requests');
+  const [activeTab, setActiveTab] = useState('timeOff'); // 'timeOff' | 'allocation' | 'calendar'
   const [requests, setRequests] = useState([]);
+  const [balances, setBalances] = useState([]);
   const [leaveTypes, setLeaveTypes] = useState([]);
+  const [holidays, setHolidays] = useState([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState(globalSearch || '');
-  const [filter, setFilter] = useState('');
+  const [statusFilter, setStatusFilter] = useState('');
   const [showModal, setShowModal] = useState(false);
-  const [reviewTarget, setReviewTarget] = useState(null);
-  const [reviewComment, setReviewComment] = useState('');
+  const [reviewingId, setReviewingId] = useState(null);
 
-  useEffect(() => { setSearch(globalSearch || ''); }, [globalSearch]);
+  const currentYear = new Date().getFullYear();
+
+  useEffect(() => {
+    setSearch(globalSearch || '');
+  }, [globalSearch]);
 
   const load = async () => {
     setLoading(true);
-    const [reqs, lts] = await Promise.all([
-      leaveService.listAllRequests({ status: filter, search }),
+    const [reqRes, ltRes, holRes, balRes] = await Promise.all([
+      leaveService.listAllRequests({ status: statusFilter, search }),
       leaveService.listLeaveTypes(),
+      leaveService.listHolidays(currentYear),
+      leaveService.getMyBalances(currentYear),
     ]);
-    if (reqs.success) setRequests(reqs.data);
-    if (lts.success) setLeaveTypes(lts.data);
+
+    if (reqRes.success && Array.isArray(reqRes.data)) setRequests(reqRes.data);
+    if (ltRes.success && Array.isArray(ltRes.data)) setLeaveTypes(ltRes.data);
+    if (holRes.success && Array.isArray(holRes.data)) setHolidays(holRes.data);
+    if (balRes.success && Array.isArray(balRes.data)) setBalances(balRes.data);
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, [filter, search]);
+  useEffect(() => {
+    load();
+  }, [statusFilter, search]);
 
-  const handleReview = async (decision) => {
-    if (!reviewTarget) return;
-    const res = await leaveService.reviewRequest(reviewTarget.id, decision, reviewComment, user?.employeeId);
+  const handleReview = async (id, decision) => {
+    setReviewingId(id);
+    const res = await leaveService.reviewRequest(id, decision);
+    setReviewingId(null);
     if (res.success) {
-      toast(`Request ${decision}.`, decision === 'approved' ? 'success' : 'info');
-      setReviewTarget(null);
-      setReviewComment('');
+      toast(`Leave request ${decision === 'approved' ? 'approved' : 'rejected'}.`, decision === 'approved' ? 'success' : 'info');
       load();
+    } else {
+      toast(res.error?.message || 'Review action failed.', 'error');
     }
   };
 
-  const columns = [
-    {
-      key: 'employee',
-      header: 'Name',
-      sortable: true,
-      sortValue: (r) => `${r.employee?.firstName} ${r.employee?.lastName}`,
-      render: (r) => (
-        <div className="flex items-center gap-2.5">
-          <Avatar name={`${r.employee?.firstName} ${r.employee?.lastName}`} src={r.employee?.avatarUrl} size="sm" />
-          <span className="text-body font-medium text-ink-primary">{r.employee?.firstName} {r.employee?.lastName}</span>
-        </div>
-      ),
-    },
-    { key: 'startDate', header: 'Start Date', sortable: true, render: (r) => <span className="tnum">{format(parseISO(r.startDate), 'dd MMM yyyy')}</span> },
-    { key: 'endDate', header: 'End Date', sortable: true, render: (r) => <span className="tnum">{format(parseISO(r.endDate), 'dd MMM yyyy')}</span> },
-    { key: 'leaveType', header: 'Type', render: (r) => <Badge tone="neutral">{r.leaveType?.name}</Badge> },
-    { key: 'days', header: 'Days', sortable: true, numeric: true, render: (r) => <span className="tnum">{r.days}</span> },
-    {
-      key: 'status',
-      header: 'Status',
-      render: (r) => (
-        <div className="flex items-center gap-2">
-          {statusBadge[r.status]}
-          {r.status === 'pending' && (
-            <div className="flex items-center gap-1">
-              <motion.button
-                whileTap={{ scale: 0.9 }}
-                onClick={() => setReviewTarget({ ...r, decision: 'approved' })}
-                className="p-1.5 rounded-lg bg-success-tint text-success hover:bg-success hover:text-white transition-colors"
-              >
-                <ThumbsUp className="w-3.5 h-3.5" />
-              </motion.button>
-              <motion.button
-                whileTap={{ scale: 0.9 }}
-                onClick={() => setReviewTarget({ ...r, decision: 'rejected' })}
-                className="p-1.5 rounded-lg bg-danger-tint text-danger hover:bg-danger hover:text-white transition-colors"
-              >
-                <ThumbsDown className="w-3.5 h-3.5" />
-              </motion.button>
-            </div>
-          )}
-        </div>
-      ),
-    },
-  ];
+  const filtered = search
+    ? requests.filter((r) => {
+        const name = `${r.firstName || r.employee?.firstName || ''} ${r.lastName || r.employee?.lastName || ''}`.toLowerCase();
+        const type = (r.leaveTypeName || r.leaveType?.name || '').toLowerCase();
+        const q = search.toLowerCase();
+        return name.includes(q) || type.includes(q);
+      })
+    : requests;
+
+  const paidBal = balances.find((b) => b.leaveTypeName?.toLowerCase().includes('paid')) || {
+    allocatedDays: 24, usedDays: 0, remainingDays: 24
+  };
+  const sickBal = balances.find((b) => b.leaveTypeName?.toLowerCase().includes('sick')) || {
+    allocatedDays: 7, usedDays: 0, remainingDays: 7
+  };
 
   return (
     <div className="flex flex-col gap-6">
-      <PageHeader
-        title="Time Off"
-        subtitle="Review and manage leave requests across the company."
-        actions={<Button onClick={() => setShowModal(true)}><Plus className="w-4 h-4" /> New</Button>}
-      />
-
-      {/* Tabs */}
-      <div className="relative flex items-center gap-1 border-b border-border">
-        {['requests', 'allocation'].map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`relative px-4 py-3 text-body font-medium capitalize transition-colors ${
-              tab === t ? 'text-ink-primary' : 'text-ink-muted hover:text-ink-secondary'
-            }`}
-          >
-            {t === 'requests' ? 'Time Off' : 'Allocation'}
-            {tab === t && (
-              <motion.div layoutId="tof-tab" className="absolute bottom-0 left-2 right-2 h-0.5 bg-primary rounded-full" transition={{ type: 'spring', stiffness: 400, damping: 32 }} />
-            )}
-          </button>
-        ))}
+      {/* Top Header & Tabs matching wireframe */}
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-h2 font-bold text-ink-primary">Time Off</h2>
+          <p className="text-small text-ink-muted">Approve, reject, and manage employee leave requests.</p>
+        </div>
+        <button
+          onClick={() => setShowModal(true)}
+          className="px-6 py-2.5 rounded-pill bg-[#e056fd] hover:bg-[#c83fe5] text-white font-bold text-sm uppercase tracking-wider transition-all shadow-md active:scale-95 flex items-center gap-2"
+        >
+          <Plus className="w-4 h-4" />
+          <span>NEW</span>
+        </button>
       </div>
 
-      {tab === 'requests' ? (
+      {/* Tabs */}
+      <div className="flex items-center gap-2 border-b border-border">
+        <button
+          onClick={() => setActiveTab('timeOff')}
+          className={`px-5 py-2.5 font-semibold text-sm rounded-t-lg transition-colors border-b-2 ${
+            activeTab === 'timeOff'
+              ? 'border-primary text-primary bg-primary-tint/20'
+              : 'border-transparent text-ink-muted hover:text-ink-primary'
+          }`}
+        >
+          Time Off
+        </button>
+        <button
+          onClick={() => setActiveTab('allocation')}
+          className={`px-5 py-2.5 font-semibold text-sm rounded-t-lg transition-colors border-b-2 ${
+            activeTab === 'allocation'
+              ? 'border-primary text-primary bg-primary-tint/20'
+              : 'border-transparent text-ink-muted hover:text-ink-primary'
+          }`}
+        >
+          Allocation
+        </button>
+        <button
+          onClick={() => setActiveTab('calendar')}
+          className={`px-5 py-2.5 font-semibold text-sm rounded-t-lg transition-colors border-b-2 ${
+            activeTab === 'calendar'
+              ? 'border-primary text-primary bg-primary-tint/20'
+              : 'border-transparent text-ink-muted hover:text-ink-primary'
+          }`}
+        >
+          Company Calendar
+        </button>
+      </div>
+
+      {/* Available Balance Cards */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+        <Card className="p-5 border-2 border-primary/20 bg-primary-tint/10 flex flex-col items-center justify-center text-center">
+          <h3 className="text-h3 font-bold text-primary">Paid time Off</h3>
+          <p className="text-2xl font-extrabold text-ink-primary mt-1">
+            {Number(paidBal.remainingDays ?? paidBal.allocatedDays ?? 24).toFixed(0).padStart(2, '0')} Days Available
+          </p>
+        </Card>
+
+        <Card className="p-5 border-2 border-info/20 bg-info-tint/10 flex flex-col items-center justify-center text-center">
+          <h3 className="text-h3 font-bold text-info">Sick time off</h3>
+          <p className="text-2xl font-extrabold text-ink-primary mt-1">
+            {Number(sickBal.remainingDays ?? sickBal.allocatedDays ?? 7).toFixed(0).padStart(2, '0')} Days Available
+          </p>
+        </Card>
+      </div>
+
+      {activeTab === 'timeOff' && (
         <>
-          {/* Filter chips */}
-          <div className="flex items-center justify-between gap-4 flex-wrap">
+          {/* Filter & Search Bar */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-2">
               {['', 'pending', 'approved', 'rejected'].map((f) => (
                 <button
                   key={f || 'all'}
-                  onClick={() => setFilter(f)}
-                  className={`px-3.5 py-1.5 rounded-pill text-small font-medium capitalize transition-colors ${
-                    filter === f ? 'bg-primary text-white' : 'bg-surface border border-border-strong text-ink-secondary hover:border-primary'
+                  onClick={() => setStatusFilter(f)}
+                  className={`px-3.5 py-1.5 rounded-pill text-xs font-semibold capitalize transition-colors ${
+                    statusFilter === f
+                      ? 'bg-primary text-white shadow-xs'
+                      : 'bg-surface border border-border text-ink-secondary hover:border-primary'
                   }`}
                 >
-                  {f || 'All'}
+                  {f || 'All Requests'}
                 </button>
               ))}
             </div>
-            <SearchInput value={search} onChange={setSearch} placeholder="Search employees..." />
+            <div className="w-full sm:w-72">
+              <SearchInput value={search} onChange={setSearch} placeholder="Search employee or type..." />
+            </div>
           </div>
 
+          {/* Table matching wireframe */}
           <Card className="overflow-hidden">
             {loading ? (
               <div className="flex flex-col">
-                {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-14 mx-5 my-1.5" />)}
+                {Array.from({ length: 6 }).map((_, i) => (
+                  <div key={i} className="flex gap-4 px-4 py-3.5 border-b border-border">
+                    <Skeleton className="h-5 flex-1" />
+                    <Skeleton className="h-5 flex-1" />
+                    <Skeleton className="h-5 flex-1" />
+                  </div>
+                ))}
               </div>
-            ) : requests.length === 0 ? (
-              <EmptyState icon={CalendarOff} title="No requests" description="No leave requests match your filters." />
+            ) : filtered.length === 0 ? (
+              <EmptyState
+                icon={CalendarOff}
+                title="No leave requests"
+                description="No time off requests match your criteria."
+              />
             ) : (
-              <Table columns={columns} data={requests} rowKey="id" pageSize={10} />
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-border bg-sunken/40 text-xs font-bold uppercase tracking-wider text-ink-secondary">
+                      <th className="py-3 px-4">Name</th>
+                      <th className="py-3 px-4">Start Date</th>
+                      <th className="py-3 px-4">End Date</th>
+                      <th className="py-3 px-4">Time off Type</th>
+                      <th className="py-3 px-4">Days</th>
+                      <th className="py-3 px-4">Certificate</th>
+                      <th className="py-3 px-4">Status</th>
+                      <th className="py-3 px-4 text-right">Reject & Approve</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {filtered.map((r) => {
+                      const empName = `${r.firstName || r.employee?.firstName || ''} ${r.lastName || r.employee?.lastName || ''}`.trim() || 'Employee';
+                      const isPending = r.status === 'pending';
+
+                      return (
+                        <tr key={r.id} className="hover:bg-sunken/30 transition-colors">
+                          {/* Name */}
+                          <td className="py-3 px-4">
+                            <div className="flex items-center gap-2.5">
+                              <Avatar name={empName} src={r.avatarUrl || r.employee?.avatarUrl} size="sm" />
+                              <div>
+                                <p className="text-body font-semibold text-ink-primary">{empName}</p>
+                                <p className="text-xs text-ink-muted">{r.departmentName || r.employee?.department || 'General'}</p>
+                              </div>
+                            </div>
+                          </td>
+
+                          {/* Start Date */}
+                          <td className="py-3 px-4 text-body font-medium tnum text-ink-primary">
+                            {format(parseISO(r.startDate), 'dd/MM/yyyy')}
+                          </td>
+
+                          {/* End Date */}
+                          <td className="py-3 px-4 text-body font-medium tnum text-ink-primary">
+                            {format(parseISO(r.endDate), 'dd/MM/yyyy')}
+                          </td>
+
+                          {/* Time Off Type */}
+                          <td className="py-3 px-4">
+                            <span className="font-semibold text-primary">
+                              {r.leaveTypeName || r.leaveType?.name || 'Paid Time Off'}
+                            </span>
+                          </td>
+
+                          {/* Days */}
+                          <td className="py-3 px-4 text-body font-semibold tnum text-ink-primary">
+                            {r.days}
+                          </td>
+
+                          {/* Medical Certificate Attachment */}
+                          <td className="py-3 px-4">
+                            {r.attachmentUrl ? (
+                              <a
+                                href={r.attachmentUrl.startsWith('http') ? r.attachmentUrl : `http://localhost:5000${r.attachmentUrl}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="inline-flex items-center gap-1 text-xs font-semibold text-primary hover:underline bg-primary-tint/30 px-2.5 py-1 rounded"
+                              >
+                                <FileText className="w-3.5 h-3.5" />
+                                <span>View Cert</span>
+                              </a>
+                            ) : (
+                              <span className="text-xs text-ink-muted">—</span>
+                            )}
+                          </td>
+
+                          {/* Status */}
+                          <td className="py-3 px-4">
+                            {statusBadge[r.status] || <Badge tone="neutral">{r.status}</Badge>}
+                          </td>
+
+                          {/* Reject & Approve Buttons matching wireframe */}
+                          <td className="py-3 px-4 text-right">
+                            {isPending ? (
+                              <div className="flex items-center justify-end gap-2">
+                                {/* Approve Button (Green) */}
+                                <button
+                                  onClick={() => handleReview(r.id, 'approved')}
+                                  disabled={reviewingId === r.id}
+                                  className="w-8 h-8 rounded bg-success hover:bg-success/90 text-white flex items-center justify-center transition-all shadow-xs active:scale-90"
+                                  title="Approve Request"
+                                >
+                                  <Check className="w-4 h-4 stroke-[3]" />
+                                </button>
+
+                                {/* Reject Button (Red) */}
+                                <button
+                                  onClick={() => handleReview(r.id, 'rejected')}
+                                  disabled={reviewingId === r.id}
+                                  className="w-8 h-8 rounded bg-danger hover:bg-danger/90 text-white flex items-center justify-center transition-all shadow-xs active:scale-90"
+                                  title="Reject Request"
+                                >
+                                  <X className="w-4 h-4 stroke-[3]" />
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-xs text-ink-muted italic">Reviewed</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
             )}
           </Card>
         </>
-      ) : (
-        <AllocationTab leaveTypes={leaveTypes} />
       )}
 
-      <NewTimeOffModal
+      {activeTab === 'allocation' && (
+        <AdminAllocationView leaveTypes={leaveTypes} requests={requests} />
+      )}
+
+      {activeTab === 'calendar' && (
+        <YearCalendarView
+          year={currentYear}
+          requests={requests}
+          holidays={holidays}
+          loading={loading}
+          onDateClick={() => setShowModal(true)}
+        />
+      )}
+
+      <TimeOffRequestModal
         open={showModal}
         onClose={() => setShowModal(false)}
-        employeeId={user?.employeeId}
+        currentUser={currentUser}
         leaveTypes={leaveTypes}
+        balances={balances}
         isAdmin
-        onSuccess={() => load()}
+        onSuccess={() => { load(); }}
       />
-
-      {/* Review confirm modal */}
-      <Modal
-        open={!!reviewTarget}
-        onClose={() => { setReviewTarget(null); setReviewComment(''); }}
-        title={reviewTarget?.decision === 'approved' ? 'Approve request?' : 'Reject request?'}
-        size="sm"
-        footer={
-          <>
-            <Button variant="ghost" onClick={() => { setReviewTarget(null); setReviewComment(''); }}>Cancel</Button>
-            <Button
-              variant={reviewTarget?.decision === 'approved' ? 'primary' : 'danger'}
-              onClick={() => handleReview(reviewTarget?.decision)}
-            >
-              {reviewTarget?.decision === 'approved' ? 'Approve' : 'Reject'}
-            </Button>
-          </>
-        }
-      >
-        {reviewTarget && (
-          <div className="flex flex-col gap-4">
-            <div className="bg-sunken rounded-card p-4">
-              <p className="text-body font-medium text-ink-primary">{reviewTarget.employee?.firstName} {reviewTarget.employee?.lastName}</p>
-              <p className="text-small text-ink-muted tnum mt-1">
-                {format(parseISO(reviewTarget.startDate), 'dd MMM')} → {format(parseISO(reviewTarget.endDate), 'dd MMM')} · {reviewTarget.days} day{reviewTarget.days !== 1 ? 's' : ''}
-              </p>
-              {reviewTarget.reason && <p className="text-small text-ink-secondary mt-2 italic">"{reviewTarget.reason}"</p>}
-            </div>
-            <Textarea
-              label="Comment (optional)"
-              value={reviewComment}
-              onChange={(e) => setReviewComment(e.target.value)}
-              placeholder="Add a note for the employee..."
-              rows={3}
-            />
-          </div>
-        )}
-      </Modal>
     </div>
   );
 }
 
-function AllocationTab({ leaveTypes }) {
-  const [allocations, setAllocations] = useState([]);
-  const [loading, setLoading] = useState(true);
+// ─── 12-Month Year Calendar View (matching Screenshot 2) ─────────────────────
 
-  useEffect(() => {
-    (async () => {
-      setLoading(true);
-      const [reqRes, empRes] = await Promise.all([
-        leaveService.listAllRequests(),
-        employeeService.listEmployees(),
-      ]);
-      if (reqRes.success) {
-        const empCount = empRes.success && Array.isArray(empRes.data) ? empRes.data.length : 1;
-        const summary = leaveTypes.map((lt) => {
-          const approved = (reqRes.data || []).filter((r) => r.leaveTypeId === lt.id && r.status === 'approved');
-          const pending = (reqRes.data || []).filter((r) => r.leaveTypeId === lt.id && r.status === 'pending');
-          const totalUsed = approved.reduce((s, r) => s + (Number(r.days) || 0), 0);
-          return { ...lt, totalAllocated: (lt.allocation || 0) * empCount, totalUsed, pending: pending.length };
+function YearCalendarView({ year, requests = [], holidays = [], loading, onDateClick }) {
+  const months = Array.from({ length: 12 }, (_, i) => new Date(year, i, 1));
+
+  // Compute status mappings for each day
+  const dayStatusMap = useMemo(() => {
+    const map = {};
+
+    // 1. Process requests
+    requests.forEach((r) => {
+      try {
+        const start = parseISO(r.startDate);
+        const end = parseISO(r.endDate);
+        const interval = eachDayOfInterval({ start, end });
+        interval.forEach((d) => {
+          if (!isWeekend(d)) {
+            const key = format(d, 'yyyy-MM-dd');
+            if (r.status === 'approved') map[key] = 'validated';
+            else if (r.status === 'pending') map[key] = 'to_approve';
+            else if (r.status === 'rejected') map[key] = 'refused';
+          }
         });
-        setAllocations(summary);
+      } catch (err) {
+        // ignore invalid dates
       }
-      setLoading(false);
-    })();
-  }, [leaveTypes]);
+    });
 
-  if (loading) return <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-32 rounded-card" />)}</div>;
+    // 2. Process holidays
+    holidays.forEach((h) => {
+      try {
+        const dateStr = typeof h.holidayDate === 'string' ? h.holidayDate.split('T')[0] : format(new Date(h.holidayDate), 'yyyy-MM-dd');
+        map[dateStr] = 'holiday';
+      } catch (err) {}
+    });
+
+    return map;
+  }, [requests, holidays]);
+
+  const defaultHolidaysList = [
+    { date: `Jan 14, ${year}`, name: 'Kite Festival' },
+    { date: `Jan 26, ${year}`, name: 'Republic Day' },
+    { date: `Mar 4, ${year}`, name: 'Dhuleti' },
+    { date: `Aug 15, ${year}`, name: 'Independence Day' },
+    { date: `Aug 28, ${year}`, name: 'Rakhi' },
+    { date: `Oct 2, ${year}`, name: 'Gandhi Jayanti' },
+    { date: `Nov 8, ${year}`, name: 'Diwali' },
+    { date: `Nov 10, ${year}`, name: 'New Year' },
+    { date: `Nov 11, ${year}`, name: 'Bhai Duj' },
+  ];
 
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-      {allocations.map((a, i) => (
-        <motion.div key={a.id} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.08 }}>
-          <Card className="p-5">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-body font-semibold text-ink-primary">{a.name}</p>
-              <span className="w-3 h-3 rounded-full" style={{ background: a.color }} />
-            </div>
-            <div className="flex items-center gap-4">
-              <ProgressRing progress={a.totalAllocated > 0 ? a.totalUsed / a.totalAllocated : 0} size={56} color={a.color}>
-                <span className="text-small font-semibold tnum text-ink-primary">{a.totalUsed}</span>
-              </ProgressRing>
-              <div className="flex-1">
-                <p className="text-small text-ink-muted"><span className="tnum">{a.totalUsed}</span> days used</p>
-                <p className="text-small text-ink-muted"><span className="tnum">{a.totalAllocated}</span> total allocated</p>
-                <p className="text-small text-ink-muted"><span className="tnum">{a.pending}</span> pending</p>
+    <div className="grid grid-cols-1 xl:grid-cols-12 gap-6">
+      {/* 12-Month Calendar Grid (9 cols on wide screens) */}
+      <Card className="xl:col-span-9 p-6 overflow-hidden">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          {months.map((m) => {
+            const monthStart = startOfMonth(m);
+            const monthEnd = endOfMonth(m);
+            const daysInMonth = eachDayOfInterval({ start: monthStart, end: monthEnd });
+            const startDayIndex = getDay(monthStart); // 0 (Sun) to 6 (Sat)
+
+            return (
+              <div key={m.getMonth()} className="flex flex-col">
+                {/* Month title */}
+                <h4 className="text-xs font-bold text-ink-primary mb-2 pb-1 border-b border-border text-center">
+                  {format(m, 'MMMM yyyy')}
+                </h4>
+
+                {/* Weekday headers */}
+                <div className="grid grid-cols-8 gap-0.5 text-center text-[10px] font-bold text-ink-muted mb-1">
+                  <span className="text-ink-muted/50 font-normal">#</span>
+                  <span>S</span>
+                  <span>M</span>
+                  <span>T</span>
+                  <span>W</span>
+                  <span>T</span>
+                  <span>F</span>
+                  <span>S</span>
+                </div>
+
+                {/* Days Grid with week numbers */}
+                <div className="grid grid-cols-8 gap-0.5 text-[10px]">
+                  {/* Empty offset padding */}
+                  <span className="text-[9px] text-ink-muted/40 flex items-center justify-center font-mono">
+                    {getWeek(monthStart)}
+                  </span>
+                  {Array.from({ length: startDayIndex }).map((_, i) => (
+                    <span key={`pad-${i}`} className="w-full aspect-square" />
+                  ))}
+
+                  {/* Month days */}
+                  {daysInMonth.map((d, index) => {
+                    const dateKey = format(d, 'yyyy-MM-dd');
+                    const status = dayStatusMap[dateKey];
+                    const weekend = isWeekend(d);
+
+                    let bgClass = 'hover:bg-sunken text-ink-primary';
+                    let title = format(d, 'dd MMM yyyy');
+
+                    if (status === 'validated') {
+                      bgClass = 'bg-[#e056fd] text-white font-bold rounded-full';
+                      title += ' (Validated Leave)';
+                    } else if (status === 'to_approve') {
+                      bgClass = 'bg-amber-400 text-white font-bold rounded-full';
+                      title += ' (To Approve)';
+                    } else if (status === 'refused') {
+                      bgClass = 'bg-red-500 text-white line-through font-bold rounded-full';
+                      title += ' (Refused)';
+                    } else if (status === 'holiday') {
+                      bgClass = 'bg-emerald-500 text-white font-bold rounded-full';
+                      title += ' (Public Holiday)';
+                    } else if (weekend) {
+                      bgClass = 'text-ink-muted/40 font-normal';
+                    }
+
+                    // Check if new week row needed
+                    const dayOfWeek = getDay(d);
+                    const isNewRow = dayOfWeek === 0 && index > 0;
+
+                    return (
+                      <button
+                        key={d.getDate()}
+                        onClick={() => onDateClick?.(d)}
+                        title={title}
+                        className={`w-full aspect-square flex items-center justify-center transition-colors text-[10px] ${bgClass}`}
+                      >
+                        {d.getDate()}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
+            );
+          })}
+        </div>
+      </Card>
+
+      {/* Right Sidebar: Legend & Public Holidays List (3 cols) */}
+      <div className="xl:col-span-3 flex flex-col gap-6">
+        {/* Legend Box matching Screenshot 2 */}
+        <Card className="p-5">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-ink-primary pb-2 mb-3 border-b border-border">
+            Legend
+          </h4>
+          <div className="flex flex-col gap-2.5 text-xs font-medium">
+            <div className="flex items-center gap-2.5">
+              <span className="w-4 h-4 rounded bg-[#e056fd] shrink-0" />
+              <span className="text-ink-primary">Validated</span>
             </div>
-          </Card>
-        </motion.div>
-      ))}
+            <div className="flex items-center gap-2.5">
+              <span className="w-4 h-4 rounded bg-amber-400 shrink-0" />
+              <span className="text-ink-primary">To Approve</span>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <span className="w-4 h-4 rounded bg-red-500 shrink-0" />
+              <span className="text-ink-primary">Refused</span>
+            </div>
+            <div className="flex items-center gap-2.5">
+              <span className="w-4 h-4 rounded bg-emerald-500 shrink-0" />
+              <span className="text-ink-primary">Public Holidays</span>
+            </div>
+          </div>
+        </Card>
+
+        {/* Public Holidays List matching Screenshot 2 */}
+        <Card className="p-5">
+          <h4 className="text-xs font-bold uppercase tracking-wider text-ink-primary pb-2 mb-3 border-b border-border">
+            Public Holidays
+          </h4>
+          <div className="flex flex-col gap-2 max-h-[380px] overflow-y-auto divide-y divide-border/60">
+            {(holidays.length > 0 ? holidays : defaultHolidaysList).map((h, i) => {
+              const dateDisplay = h.date || format(new Date(h.holidayDate), 'MMM dd, yyyy');
+              return (
+                <div key={i} className="pt-2 first:pt-0 flex flex-col gap-0.5">
+                  <span className="text-xs font-semibold text-ink-primary">{dateDisplay} : {h.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </div>
     </div>
   );
 }
 
-// ─── New Time Off Modal ───
+// ─── Admin Allocation View ───────────────────────────────────────────────────
 
-function NewTimeOffModal({ open, onClose, employeeId, leaveTypes, balances, isAdmin, existingRequests = [], onSuccess }) {
+function AdminAllocationView({ leaveTypes, requests }) {
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
+      {leaveTypes.map((lt) => {
+        const approvedCount = requests.filter((r) => r.leaveTypeId === lt.id && r.status === 'approved').length;
+        const pendingCount = requests.filter((r) => r.leaveTypeId === lt.id && r.status === 'pending').length;
+
+        return (
+          <Card key={lt.id} className="p-6">
+            <h3 className="text-body font-bold text-ink-primary">{lt.name}</h3>
+            <p className="text-xs text-ink-muted mt-1">Default allowance: {lt.defaultDays || lt.allocation || 0} days</p>
+
+            <div className="mt-4 pt-4 border-t border-border flex items-center justify-between text-xs">
+              <span className="text-success font-semibold">{approvedCount} Approved</span>
+              <span className="text-warning font-semibold">{pendingCount} Pending</span>
+            </div>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Time off Type Request Modal (matching wireframe popup) ───────────────────
+
+function TimeOffRequestModal({ open, onClose, currentUser, leaveTypes = [], balances = [], initialDate, isAdmin, onSuccess }) {
   const { toast } = useToast();
-  const [form, setForm] = useState({});
-  const [errors, setErrors] = useState({});
+  const [leaveTypeId, setLeaveTypeId] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [reason, setReason] = useState('');
+  const [file, setFile] = useState(null);
   const [loading, setLoading] = useState(false);
-  const [days, setDays] = useState(0);
-
-  const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
+  const [employees, setEmployees] = useState([]);
+  const [selectedEmpId, setSelectedEmpId] = useState('');
 
   useEffect(() => {
-    if (form.startDate && form.endDate) {
-      const s = new Date(form.startDate);
-      const e = new Date(form.endDate);
-      if (e >= s) {
-        let count = 0;
-        const cur = new Date(s);
-        while (cur <= e) {
-          if (!isWeekend(cur)) count++;
-          cur.setDate(cur.getDate() + 1);
-        }
-        setDays(count);
-      } else setDays(0);
-    } else setDays(0);
-  }, [form.startDate, form.endDate]);
-
-  const isSickLeave = form.leaveTypeId === 'lt2';
-
-  const validate = () => {
-    const e = {};
-    if (!form.leaveTypeId) e.leaveTypeId = 'Select a leave type.';
-    if (!form.startDate) e.startDate = 'Required.';
-    if (!form.endDate) e.endDate = 'Required.';
-    if (form.startDate && form.endDate && new Date(form.endDate) < new Date(form.startDate)) e.endDate = 'End must be after start.';
-    if (balances && form.leaveTypeId && balances[form.leaveTypeId]) {
-      const bal = balances[form.leaveTypeId];
-      if (days > bal.available) e.endDate = `Only ${bal.available} day(s) available.`;
+    if (open) {
+      if (initialDate) {
+        setStartDate(initialDate);
+        setEndDate(initialDate);
+      } else {
+        const today = format(new Date(), 'yyyy-MM-dd');
+        setStartDate(today);
+        setEndDate(today);
+      }
+      if (leaveTypes.length > 0) {
+        setLeaveTypeId(String(leaveTypes[0].id));
+      }
+      if (isAdmin) {
+        employeeService.listEmployees().then((res) => {
+          if (res.success && Array.isArray(res.data)) setEmployees(res.data);
+        });
+      }
     }
-    if (isSickLeave && !form.attachmentUrl) e.attachment = 'Medical certificate required for Sick Leave.';
-    setErrors(e);
-    return Object.keys(e).length === 0;
-  };
+  }, [open, initialDate, leaveTypes, isAdmin]);
 
-  const handleSubmit = async () => {
-    if (!validate()) return;
+  const selectedType = leaveTypes.find((lt) => String(lt.id) === String(leaveTypeId));
+  const isSickLeave = selectedType?.name?.toLowerCase().includes('sick');
+
+  // Compute working days in range
+  const daysCount = useMemo(() => {
+    if (!startDate || !endDate) return 0;
+    try {
+      const s = parseISO(startDate);
+      const e = parseISO(endDate);
+      if (e < s) return 0;
+      let count = 0;
+      const cur = new Date(s);
+      while (cur <= e) {
+        if (!isWeekend(cur)) count++;
+        cur.setDate(cur.getDate() + 1);
+      }
+      return count;
+    } catch {
+      return 0;
+    }
+  }, [startDate, endDate]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!startDate || !endDate) {
+      toast('Please select validity period (start and end date).', 'error');
+      return;
+    }
+    if (new Date(endDate) < new Date(startDate)) {
+      toast('End date cannot be earlier than start date.', 'error');
+      return;
+    }
+    if (daysCount <= 0) {
+      toast('Selected date range contains no working days (weekends only).', 'error');
+      return;
+    }
+    if (isSickLeave && !file) {
+      toast('Medical certificate is required for Sick Leave.', 'error');
+      return;
+    }
+
     setLoading(true);
-    const res = await leaveService.createRequest({
-      employeeId: form.employeeId || employeeId,
-      leaveTypeId: form.leaveTypeId,
-      startDate: form.startDate,
-      endDate: form.endDate,
-      reason: form.reason || '',
-      attachmentUrl: form.attachmentUrl || null,
-    });
-    setLoading(false);
-    if (res.success) {
-      toast('Time off request submitted.', 'success');
-      setForm({});
-      setErrors({});
-      onSuccess?.();
-      onClose();
-    } else {
-      toast(res.error?.message || 'Request failed.', 'error');
+
+    try {
+      const formData = new FormData();
+      formData.append('leaveTypeId', leaveTypeId);
+      formData.append('startDate', startDate);
+      formData.append('endDate', endDate);
+      if (reason) formData.append('reason', reason);
+      if (file) formData.append('attachment', file);
+
+      const res = await leaveService.createRequest(formData);
+      setLoading(false);
+
+      if (res.success) {
+        toast('Time off request submitted successfully.', 'success');
+        setFile(null);
+        setReason('');
+        onSuccess?.();
+        onClose();
+      } else {
+        toast(res.error?.message || 'Failed to submit time off request.', 'error');
+      }
+    } catch (err) {
+      setLoading(false);
+      toast('Error submitting request.', 'error');
     }
   };
 
-  const reset = () => { setForm({}); setErrors({}); setDays(0); };
+  const employeeDisplayName = `${currentUser?.firstName || ''} ${currentUser?.lastName || ''}`.trim() || currentUser?.loginId || 'Current Employee';
 
   return (
     <Modal
       open={open}
-      onClose={() => { onClose(); reset(); }}
-      title="New Time Off Request"
-      size="lg"
-      footer={
-        <>
-          <Button variant="ghost" onClick={() => { onClose(); reset(); }}>Discard</Button>
-          <Button onClick={handleSubmit} loading={loading}>Submit request</Button>
-        </>
-      }
+      onClose={onClose}
+      title="Time off Type Request"
+      size="md"
     >
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        {isAdmin && (
-          <Input label="Employee" placeholder="Search employee..." value={form.employeeName || ''} onChange={() => {}} />
-        )}
-        <Select
-          label="Time off type"
-          placeholder="Select..."
-          options={leaveTypes.map((lt) => ({ value: lt.id, label: lt.name }))}
-          value={form.leaveTypeId || ''}
-          onChange={(e) => set('leaveTypeId', e.target.value)}
-          error={errors.leaveTypeId}
-        />
-        <DatePicker
-          label="From"
-          value={form.startDate || ''}
-          onChange={(e) => set('startDate', e.target.value)}
-          error={errors.startDate}
-        />
-        <DatePicker
-          label="To"
-          value={form.endDate || ''}
-          onChange={(e) => set('endDate', e.target.value)}
-          min={form.startDate}
-          error={errors.endDate}
-        />
-        <div className="sm:col-span-2">
-          <div className="bg-sunken rounded-input px-4 py-3 flex items-center justify-between">
-            <span className="text-small text-ink-muted uppercase tracking-wide">Allocation</span>
-            <span className="text-body font-semibold text-ink-primary tnum">{days} day{days !== 1 ? 's' : ''} <span className="text-small text-ink-muted font-normal">(excl. weekends)</span></span>
-          </div>
-        </div>
-        <div className="sm:col-span-2">
-          <Textarea
-            label="Reason"
-            placeholder="Why are you requesting time off?"
-            value={form.reason || ''}
-            onChange={(e) => set('reason', e.target.value)}
-            rows={3}
+      <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+        {/* Employee field */}
+        <div>
+          <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1">
+            Employee
+          </label>
+          <input
+            type="text"
+            readOnly
+            value={employeeDisplayName}
+            className="w-full h-10 px-3.5 rounded-input bg-sunken border border-border text-body font-semibold text-ink-primary"
           />
         </div>
-        {isSickLeave && (
-          <div className="sm:col-span-2">
-            <FileDropzone
-              label="Medical Certificate"
+
+        {/* Time off Type */}
+        <div>
+          <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1">
+            Time off Type
+          </label>
+          <select
+            value={leaveTypeId}
+            onChange={(e) => setLeaveTypeId(e.target.value)}
+            className="w-full h-10 px-3.5 rounded-input bg-white border border-border-strong text-body font-medium text-ink-primary focus-ring"
+          >
+            {leaveTypes.map((lt) => (
+              <option key={lt.id} value={lt.id}>
+                {lt.name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Validity Period */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1">
+              From
+            </label>
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="w-full h-10 px-3 rounded-input bg-white border border-border-strong text-body text-ink-primary focus-ring"
               required
-              error={errors.attachment}
-              hint="Required for Sick Leave. Upload a photo or PDF."
-              onChange={(f) => set('attachmentUrl', f ? `mock://${f.name}` : null)}
             />
           </div>
-        )}
-      </div>
+          <div>
+            <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1">
+              To
+            </label>
+            <input
+              type="date"
+              value={endDate}
+              min={startDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="w-full h-10 px-3 rounded-input bg-white border border-border-strong text-body text-ink-primary focus-ring"
+              required
+            />
+          </div>
+        </div>
+
+        {/* Allocation days */}
+        <div className="bg-sunken/60 rounded-input p-3 flex items-center justify-between border border-border">
+          <span className="text-label font-semibold uppercase tracking-wide text-ink-secondary">
+            Allocation
+          </span>
+          <span className="text-body font-bold text-primary tnum">
+            {Number(daysCount).toFixed(2)} Days
+          </span>
+        </div>
+
+        {/* Reason note */}
+        <div>
+          <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1">
+            Reason (optional)
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            placeholder="Brief reason for time off..."
+            className="w-full p-2.5 rounded-input bg-white border border-border-strong text-body text-ink-primary focus-ring"
+          />
+        </div>
+
+        {/* Attachment (for sick leave certificate) */}
+        <div>
+          <label className="text-label font-medium uppercase tracking-wide text-ink-secondary flex items-center justify-between mb-1">
+            <span>Attachment</span>
+            <span className="text-xs text-primary font-normal">(For sick leave certificate)</span>
+          </label>
+          <div className="flex items-center gap-3">
+            <label className="cursor-pointer flex items-center gap-2 px-4 py-2 rounded-input bg-white border border-border-strong hover:bg-sunken text-body font-medium text-ink-primary transition-colors shadow-xs">
+              <Upload className="w-4 h-4 text-primary" />
+              <span>{file ? file.name : 'Choose File / Certificate'}</span>
+              <input
+                type="file"
+                accept=".pdf,.png,.jpg,.jpeg,.webp"
+                className="hidden"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+              />
+            </label>
+            {file && (
+              <button
+                type="button"
+                onClick={() => setFile(null)}
+                className="text-xs text-danger hover:underline"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+          {isSickLeave && !file && (
+            <p className="text-xs text-amber-600 mt-1 flex items-center gap-1">
+              <AlertCircle className="w-3 h-3" />
+              <span>Medical certificate is required when submitting Sick Leave.</span>
+            </p>
+          )}
+        </div>
+
+        {/* Action Buttons matching wireframe (Submit / Discard) */}
+        <div className="flex items-center justify-end gap-3 pt-3 border-t border-border mt-2">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+          >
+            Discard
+          </Button>
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-6 py-2 rounded-input bg-[#e056fd] hover:bg-[#c83fe5] text-white font-bold text-sm uppercase tracking-wider transition-all shadow-sm active:scale-95 disabled:opacity-50"
+          >
+            {loading ? 'Submitting...' : 'Submit'}
+          </button>
+        </div>
+      </form>
     </Modal>
   );
 }

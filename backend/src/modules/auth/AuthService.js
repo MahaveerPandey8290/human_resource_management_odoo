@@ -77,6 +77,49 @@ export class AuthService extends BaseService {
 
       await this.authRepo.initializeSequence(companyId, joinYear, conn);
 
+      // 1. Insert default leave types
+      const ltResult = await conn.query(
+        `INSERT INTO leave_types (company_id, name, is_paid, requires_attachment, default_days)
+         VALUES
+           ($1, 'Paid Time Off', true, false, 24.0),
+           ($1, 'Sick Leave', true, true, 7.0),
+           ($1, 'Unpaid Leaves', false, false, 0.0)
+         RETURNING id, name, default_days`,
+        [companyId]
+      );
+
+      // 2. Allocate leave balances for admin
+      for (const lt of ltResult.rows) {
+        await conn.query(
+          `INSERT INTO leave_allocations (employee_id, leave_type_id, year, allocated_days, used_days)
+           VALUES ($1, $2, $3, $4, 0.0)
+           ON CONFLICT (employee_id, leave_type_id, year) DO NOTHING`,
+          [adminId, lt.id, joinYear, lt.default_days]
+        );
+      }
+
+      // 3. Insert default company holidays for current year
+      const defaultHolidays = [
+        { date: `${joinYear}-01-14`, name: 'Kite Festival' },
+        { date: `${joinYear}-01-26`, name: 'Republic Day' },
+        { date: `${joinYear}-03-04`, name: 'Dhuleti' },
+        { date: `${joinYear}-08-15`, name: 'Independence Day' },
+        { date: `${joinYear}-08-28`, name: 'Rakhi' },
+        { date: `${joinYear}-10-02`, name: 'Gandhi Jayanti' },
+        { date: `${joinYear}-11-08`, name: 'Diwali' },
+        { date: `${joinYear}-11-10`, name: 'New Year' },
+        { date: `${joinYear}-11-11`, name: 'Bhai Duj' },
+      ];
+
+      for (const h of defaultHolidays) {
+        await conn.query(
+          `INSERT INTO holidays (company_id, holiday_date, name)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (company_id, holiday_date) DO NOTHING`,
+          [companyId, h.date, h.name]
+        );
+      }
+
       const user = { id: adminId, loginId, role: UserRole.ADMIN, companyId, email: data.adminEmail, mustChangePassword: false };
       const token = this.generateToken(user, false);
 

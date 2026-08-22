@@ -21,7 +21,10 @@ import { api } from '@/lib/api';
  * (Paid Time Off, Sick Leave, Unpaid Leave, etc.)
  */
 export async function listLeaveTypes() {
-  return api.get('/leave-types');
+  const res = await api.get('/leave-types');
+  if (res.success && Array.isArray(res.data)) return res;
+  // Fallback to /leaves/types
+  return api.get('/leaves/types');
 }
 
 // ── Balances ──────────────────────────────────────────────────────────────────
@@ -35,7 +38,8 @@ export async function listLeaveTypes() {
 export async function getMyBalances(yearOrEmpId) {
   const currentYear = new Date().getFullYear();
   const year = (typeof yearOrEmpId === 'number' && yearOrEmpId > 1900) ? yearOrEmpId : currentYear;
-  return api.get(`/leaves/balances?year=${year}`);
+  const res = await api.get(`/leaves/allocations/me?year=${year}`);
+  return res;
 }
 
 // ── Leave requests list ───────────────────────────────────────────────────────
@@ -43,43 +47,42 @@ export async function getMyBalances(yearOrEmpId) {
 /**
  * Lists leave requests.
  *
- * Employees automatically see only their own; admin/HR see all.
+ * Employees automatically see only their own; admin/HR see all when scope='all'.
  *
- * @param {{ status?: string, search?: string, page?: number, limit?: number }} opts
+ * @param {{ status?: string, search?: string, page?: number, limit?: number, scope?: string }} opts
  */
-export async function listRequests({ status = '', search = '', page = 1, limit = 50 } = {}) {
-  const params = new URLSearchParams({ page, limit });
+export async function listRequests({ status = '', search = '', page = 1, limit = 50, scope = 'me' } = {}) {
+  const params = new URLSearchParams({ page, limit, scope });
   if (status) params.set('status', status);
   if (search) params.set('search', search);
   return api.get(`/leaves?${params}`);
 }
 
 export async function listMyRequests(employeeId) {
-  const res = await listRequests();
-  if (res.success && Array.isArray(res.data)) {
-    return { success: true, data: res.data };
-  }
-  return res;
+  return listRequests({ scope: 'me' });
 }
 
 export async function listAllRequests(opts = {}) {
-  return listRequests(opts);
+  return listRequests({ ...opts, scope: 'all' });
 }
 
 // ── Submit leave request ──────────────────────────────────────────────────────
 
 /**
  * Submits a new time-off request.
- * Attachment upload is handled separately; pass the returned URL here.
+ * Can take a FormData instance (with attached medical certificate file) or a JSON object.
  *
- * @param {{ leaveTypeId, startDate, endDate, reason, attachmentUrl? }} payload
+ * @param {FormData|{ leaveTypeId, startDate, endDate, reason, attachmentUrl? }} payload
  */
 export async function createRequest(payload) {
+  if (payload instanceof FormData) {
+    return api.post('/leaves', payload);
+  }
   return api.post('/leaves', {
-    leaveTypeId:   payload.leaveTypeId,
+    leaveTypeId:   Number(payload.leaveTypeId),
     startDate:     payload.startDate,
     endDate:       payload.endDate,
-    reason:        payload.reason,
+    reason:        payload.reason || '',
     attachmentUrl: payload.attachmentUrl || null,
   });
 }
@@ -96,8 +99,11 @@ export async function createRequest(payload) {
  * @param {string} [comment]
  */
 export async function reviewRequest(requestId, action, comment) {
-  const normAction = action === 'approved' || action === 'approve' ? 'approve' : 'reject';
-  return api.patch(`/leaves/${requestId}/review`, { action: normAction, comment });
+  const status = action === 'approved' || action === 'approve' ? 'approved' : 'rejected';
+  return api.patch(`/leaves/${requestId}/status`, {
+    status,
+    reviewComment: comment || '',
+  });
 }
 
 // ── Cancel request ────────────────────────────────────────────────────────────
@@ -116,7 +122,7 @@ export async function cancelRequest(requestId) {
 // ── Calendar (approved leaves) ────────────────────────────────────────────────
 
 /**
- * Returns all approved leave ranges for the year calendar view.
+ * Returns all leave ranges for the year calendar view.
  *
  * @param {number} [year]
  */

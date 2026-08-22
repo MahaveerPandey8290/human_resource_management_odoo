@@ -362,12 +362,12 @@ export class LeaveRepository extends BaseRepository {
          lr.id, lr.employee_id,
          e.first_name, e.last_name,
          lr.start_date, lr.end_date, lr.days,
+         lr.status,
          lt.name AS leave_type_name
        FROM leave_requests lr
        JOIN employees   e  ON e.id  = lr.employee_id
        JOIN leave_types lt ON lt.id = lr.leave_type_id
        WHERE e.company_id = $1
-         AND lr.status    = 'approved'
          AND (EXTRACT(YEAR FROM lr.start_date) = $2
               OR EXTRACT(YEAR FROM lr.end_date) = $2)
        ORDER BY lr.start_date ASC`,

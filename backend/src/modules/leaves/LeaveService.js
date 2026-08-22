@@ -185,7 +185,7 @@ export class LeaveService extends BaseService {
 
         // Record audit log
         await conn.query(
-          `INSERT INTO audit_logs (actor_employee_id, action, entity, entity_id, meta) VALUES (?, 'APPROVE_LEAVE', 'leave_requests', ?, ?)`,
+          `INSERT INTO audit_logs (actor_employee_id, action, entity, entity_id, meta) VALUES ($1, 'APPROVE_LEAVE', 'leave_requests', $2, $3)`,
           [reviewerId, requestId, JSON.stringify({ days: request.days, employeeId: request.employeeId })]
         );
       }
