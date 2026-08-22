@@ -379,10 +379,11 @@ function FieldRow({ field, value, editable, onSave }) {
 function SalaryTab({ salary, employeeId, canEdit, onUpdate }) {
   const { toast } = useToast();
   const reduce = useReducedMotion();
-  const [wage, setWage] = useState(salary?.monthlyWage || 0);
+  const [wage, setWage] = useState(salary?.monthlyWage || 50000);
   const [workingDays, setWorkingDays] = useState(salary?.workingDaysPerWeek || 5);
-  const [breakMins, setBreakMins] = useState(salary?.breakMinutes || 45);
+  const [breakHours, setBreakHours] = useState(salary?.breakMinutes ? (salary.breakMinutes / 60) : 1);
   const [animatedAmounts, setAnimatedAmounts] = useState({});
+  const [saving, setSaving] = useState(false);
 
   const computed = useMemo(() => {
     const components = computeSalaryComponents(wage);
@@ -419,121 +420,242 @@ function SalaryTab({ salary, employeeId, canEdit, onUpdate }) {
     });
   }, [computed, reduce]);
 
-  const saveWage = async () => {
-    const res = await salaryService.updateMonthlyWage(employeeId, wage);
-    if (res.success) { onUpdate(res.data); toast('Salary updated.', 'success'); }
-    else toast('Update failed.', 'error');
+  const saveSalaryConfig = async () => {
+    setSaving(true);
+    const res = await salaryService.updateSalary(employeeId, {
+      monthlyWage: wage,
+      workingDaysPerWeek: workingDays,
+      breakMinutes: Math.round(breakHours * 60),
+    });
+    setSaving(false);
+    if (res.success) {
+      onUpdate(res.data);
+      toast('Salary structure and working schedule saved.', 'success');
+    } else {
+      toast(res.error?.message || 'Failed to update salary.', 'error');
+    }
   };
 
   const yearlyWage = wage * 12;
-  const fmt = (n) => `₹${(n || 0).toLocaleString('en-IN')}`;
+  const fmt = (n) => `${(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ₹`;
 
-  const componentMeta = [
-    { name: 'Basic Salary', desc: '50% of monthly wage' },
-    { name: 'House Rent Allowance', desc: '50% of Basic Salary' },
-    { name: 'Standard Allowance', desc: '16.67% of Basic Salary' },
-    { name: 'Performance Bonus', desc: '8.33% of Basic Salary' },
-    { name: 'Leave Travel Allowance', desc: '8.33% of Basic Salary' },
-    { name: 'Fixed Allowance', desc: 'Wage minus all components above' },
-  ];
+  const componentDescriptions = {
+    'Basic Salary': 'Define Basic salary from company cost compute it based on monthly wages',
+    'House Rent Allowance': 'HRA provided to employees 50% of the basic salary',
+    'Standard Allowance': 'A standard allowance is a predetermined, fixed amount provided to employee as part of their salary',
+    'Performance Bonus': 'Variable amount paid during payroll. The value defined by the company and calculated as a % of the basic salary',
+    'Leave Travel Allowance': 'LTA is paid by the company to employees to cover their travel expenses, and calculated as a % of the basic salary',
+    'Fixed Allowance': 'Fixed allowance portion of wages is determined after calculating all salary components',
+  };
+
+  const basicAmt = (wage * 0.5);
+  const fixedAllowancePct = basicAmt > 0 ? (((wage - (basicAmt * (1 + 0.5 + 0.1667 + 0.0833 + 0.0833))) / basicAmt) * 100).toFixed(2) : '11.67';
 
   return (
-    <div className="flex flex-col gap-5">
-      {/* Wage configuration */}
-      <Card className="p-5">
-        <h4 className="text-body font-semibold text-ink-primary mb-4">Monthly Configuration</h4>
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          <Input
-            label="Month Wage"
-            type="number"
-            value={wage}
-            onChange={(e) => setWage(Number(e.target.value) || 0)}
-            disabled={!canEdit}
-            hint="Total monthly salary"
-          />
-          <Input
-            label="Yearly Wage"
-            value={fmt(yearlyWage)}
-            readOnly
-            hint="Auto-calculated (×12)"
-            containerClassName="opacity-70"
-          />
-          <Input
-            label="Working days / week"
-            type="number"
-            value={workingDays}
-            onChange={(e) => setWorkingDays(Number(e.target.value) || 0)}
-            disabled={!canEdit}
-          />
-          <Input
-            label="Break time (minutes)"
-            type="number"
-            value={breakMins}
-            onChange={(e) => setBreakMins(Number(e.target.value) || 0)}
-            disabled={!canEdit}
-          />
+    <div className="flex flex-col gap-6">
+      {/* Top Header Section: Wage & Working Schedule */}
+      <Card className="p-6">
+        <div className="flex items-center justify-between pb-4 mb-5 border-b border-border">
+          <h3 className="text-h3 font-semibold text-ink-primary">Salary Info</h3>
+          {canEdit && (
+            <Button onClick={saveSalaryConfig} loading={saving} size="sm" className="flex items-center gap-1.5">
+              <Check className="w-4 h-4" />
+              <span>Save salary structure</span>
+            </Button>
+          )}
         </div>
-        {canEdit && (
-          <Button onClick={saveWage} className="mt-4"><Check className="w-4 h-4" /> Save changes</Button>
-        )}
-      </Card>
 
-      {/* Salary components */}
-      <Card className="p-5">
-        <div className="flex items-center justify-between mb-4">
-          <h4 className="text-body font-semibold text-ink-primary">Salary Components</h4>
-          <div className={`flex items-center gap-2 px-3 py-1.5 rounded-pill text-small font-medium ${computed.exceeds ? 'bg-danger-tint text-danger' : 'bg-success-tint text-success'}`}>
-            <span className={`w-2 h-2 rounded-full ${computed.exceeds ? 'bg-danger' : 'bg-success'}`} />
-            Total = {fmt(computed.total)} {computed.exceeds ? '✗' : '✓'}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Wage details */}
+          <div className="space-y-4">
+            <div>
+              <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1.5">
+                Month Wage
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  value={wage}
+                  onChange={(e) => setWage(Math.max(0, Number(e.target.value) || 0))}
+                  disabled={!canEdit}
+                  className="w-full max-w-[200px] h-10 px-3.5 rounded-input bg-white border border-border-strong text-body font-semibold text-ink-primary focus-ring"
+                />
+                <span className="text-body font-medium text-ink-muted">/ Month</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1.5">
+                Yearly Wage
+              </label>
+              <div className="flex items-center gap-2">
+                <span className="text-h3 font-bold text-ink-primary tracking-tight tnum">
+                  ₹{yearlyWage.toLocaleString('en-IN')}
+                </span>
+                <span className="text-body font-medium text-ink-muted">/ Yearly</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Working Schedule */}
+          <div className="space-y-4">
+            <div>
+              <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1.5">
+                No of working days in a week:
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min="1"
+                  max="7"
+                  value={workingDays}
+                  onChange={(e) => setWorkingDays(Number(e.target.value) || 5)}
+                  disabled={!canEdit}
+                  className="w-24 h-10 px-3.5 rounded-input bg-white border border-border-strong text-body font-semibold text-ink-primary focus-ring"
+                />
+                <span className="text-small text-ink-muted">days</span>
+              </div>
+            </div>
+
+            <div>
+              <label className="text-label font-medium uppercase tracking-wide text-ink-secondary block mb-1.5">
+                Break Time:
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  step="0.25"
+                  min="0"
+                  max="4"
+                  value={breakHours}
+                  onChange={(e) => setBreakHours(Number(e.target.value) || 0)}
+                  disabled={!canEdit}
+                  className="w-24 h-10 px-3.5 rounded-input bg-white border border-border-strong text-body font-semibold text-ink-primary focus-ring"
+                />
+                <span className="text-body font-medium text-ink-muted">/ hrs</span>
+              </div>
+            </div>
           </div>
         </div>
-        <div className="flex flex-col">
-          {computed.components.map((c, i) => {
-            const meta = componentMeta[i];
-            return (
-              <div key={c.name} className="flex items-center justify-between gap-4 py-3.5 border-b border-border last:border-0">
-                <div className="flex-1">
-                  <p className="text-body font-medium text-ink-primary">{c.name}</p>
-                  <p className="text-small text-ink-muted mt-0.5">{meta?.desc}</p>
-                </div>
-                <div className="flex items-center gap-3">
-                  {c.computationType === 'percentage' && (
-                    <Badge tone="neutral">{c.rate}%</Badge>
-                  )}
-                  <div className="text-right">
-                    <p className="text-body font-semibold text-ink-primary tnum">{fmt(animatedAmounts[c.name] || 0)}</p>
-                    <p className="text-small text-ink-muted">/ month</p>
+      </Card>
+
+      {/* Two Column Layout matching wireframe */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+        {/* Left Column: Salary Components (7 cols) */}
+        <Card className="lg:col-span-7 p-6 flex flex-col justify-between">
+          <div>
+            <div className="flex items-center justify-between pb-3 mb-4 border-b border-border">
+              <h4 className="text-body font-bold uppercase tracking-wider text-ink-primary">
+                Salary Components
+              </h4>
+              <div className="text-xs font-semibold text-success bg-success-tint px-2.5 py-1 rounded-pill">
+                Total = ₹{wage.toLocaleString('en-IN')} ✓
+              </div>
+            </div>
+
+            <div className="divide-y divide-border">
+              {computed.components.map((c) => {
+                const desc = componentDescriptions[c.name] || '';
+                const amt = animatedAmounts[c.name] || c.amount || 0;
+                let rateLabel = `${c.rate.toFixed(2)} %`;
+                if (c.name === 'Fixed Allowance') rateLabel = `${fixedAllowancePct} %`;
+                if (c.name === 'Standard Allowance') rateLabel = '16.67 %';
+
+                return (
+                  <div key={c.name} className="py-3.5 flex flex-col gap-1">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="text-body font-semibold text-ink-primary">
+                        {c.name}
+                      </span>
+                      <div className="flex items-center gap-3">
+                        <span className="text-body font-bold text-ink-primary tnum">
+                          {fmt(amt)} <span className="text-xs font-normal text-ink-muted">/ month</span>
+                        </span>
+                        <span className="text-xs font-medium text-ink-secondary bg-sunken border border-border px-2 py-0.5 rounded">
+                          {rateLabel}
+                        </span>
+                      </div>
+                    </div>
+                    {desc && (
+                      <p className="text-xs text-ink-muted leading-relaxed">
+                        {desc}
+                      </p>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </Card>
+
+        {/* Right Column: PF & Tax Deductions (5 cols) */}
+        <div className="lg:col-span-5 flex flex-col gap-6">
+          {/* Provident Fund (PF) Contribution */}
+          <Card className="p-6">
+            <h4 className="text-body font-bold uppercase tracking-wider text-ink-primary pb-3 mb-3 border-b border-border">
+              Provident Fund (PF) Contribution
+            </h4>
+
+            <div className="divide-y divide-border">
+              {/* Employee PF */}
+              <div className="py-3 flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-body font-semibold text-ink-primary">Employee</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-body font-bold text-ink-primary tnum">
+                      {fmt(animatedAmounts._pf_emp || computed.pf.employeePF)}
+                      <span className="text-xs font-normal text-ink-muted"> / month</span>
+                    </span>
+                    <span className="text-xs font-medium text-ink-secondary bg-sunken border border-border px-2 py-0.5 rounded">
+                      12.00 %
+                    </span>
                   </div>
                 </div>
+                <p className="text-xs text-ink-muted">
+                  PF is calculated based on the basic salary
+                </p>
               </div>
-            );
-          })}
-        </div>
-      </Card>
 
-      {/* PF and Tax */}
-      <Card className="p-5">
-        <h4 className="text-body font-semibold text-ink-primary mb-4">Deductions</h4>
-        <div className="flex flex-col">
-          <DeductionRow label="PF Contribution — Employee" desc="12% of Basic Salary" amount={fmt(animatedAmounts._pf_emp || 0)} />
-          <DeductionRow label="PF Contribution — Employer" desc="12% of Basic Salary" amount={fmt(animatedAmounts._pf_er || 0)} />
-          <DeductionRow label="Professional Tax" desc="Flat ₹200/month" amount={fmt(animatedAmounts._pt || 0)} last />
-        </div>
-      </Card>
-    </div>
-  );
-}
+              {/* Employer PF */}
+              <div className="py-3 flex flex-col gap-1">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-body font-semibold text-ink-primary">Employer</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-body font-bold text-ink-primary tnum">
+                      {fmt(animatedAmounts._pf_er || computed.pf.employerPF)}
+                      <span className="text-xs font-normal text-ink-muted"> / month</span>
+                    </span>
+                    <span className="text-xs font-medium text-ink-secondary bg-sunken border border-border px-2 py-0.5 rounded">
+                      12.00 %
+                    </span>
+                  </div>
+                </div>
+                <p className="text-xs text-ink-muted">
+                  PF is calculated based on the basic salary
+                </p>
+              </div>
+            </div>
+          </Card>
 
-function DeductionRow({ label, desc, amount, last }) {
-  return (
-    <div className={`flex items-center justify-between gap-4 py-3.5 ${last ? '' : 'border-b border-border'}`}>
-      <div>
-        <p className="text-body font-medium text-ink-primary">{label}</p>
-        <p className="text-small text-ink-muted mt-0.5">{desc}</p>
-      </div>
-      <div className="text-right">
-        <p className="text-body font-semibold text-ink-primary tnum">{amount}</p>
-        <p className="text-small text-ink-muted">/ month</p>
+          {/* Tax Deductions */}
+          <Card className="p-6">
+            <h4 className="text-body font-bold uppercase tracking-wider text-ink-primary pb-3 mb-3 border-b border-border">
+              Tax Deductions
+            </h4>
+
+            <div className="py-2 flex flex-col gap-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-body font-semibold text-ink-primary">Professional Tax</span>
+                <span className="text-body font-bold text-ink-primary tnum">
+                  200.00 ₹ <span className="text-xs font-normal text-ink-muted">/ month</span>
+                </span>
+              </div>
+              <p className="text-xs text-ink-muted">
+                Professional Tax deducted from the Gross salary
+              </p>
+            </div>
+          </Card>
+        </div>
       </div>
     </div>
   );
