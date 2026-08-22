@@ -1,0 +1,79 @@
+.text-btn {
+  background: none;
+  color: var(--accent-orange);
+  font-weight: 500;
+  font-size: 0.9rem;
+}
+
+.text-btn:hover {
+  color: var(--accent-orange-hover);
+  text-decoration: underline;
+}
+
+.requests-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-md);
+}
+
+.request-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-sm) 0;
+  border-bottom: 1px solid var(--bg-card-secondary);
+}
+
+.request-item:last-child {
+  border-bottom: none;
+}
+
+.request-info {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.request-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background-color: var(--bg-card-secondary);
+  color: var(--primary-navy);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 600;
+}
+
+.request-details p {
+  margin: 0;
+}
+
+.request-name {
+  font-weight: 600;
+  color: var(--primary-navy);
+}
+
+.request-meta {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.status-badge {
+  padding: 4px 12px;
+  border-radius: 20px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.status-badge.pending {
+  background-color: #FDF3E1; /* Soft orange bg */
+  color: var(--accent-orange);
+}
+
+.status-badge.approved {
+  background-color: #E2F0EB; /* Soft green bg */
+  color: #2D7A5D;
+}
